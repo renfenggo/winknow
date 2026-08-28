@@ -1,0 +1,40 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+*.db
+*.log
+*.tmp
+*.temp
+*.cache
+*.pdb
+*.dll
+*.exe
+*.msi
+
+# Visual Studio and IDEs
+.vs/
+.idea/
+.vscode/
+*.vsconfig
+*.swp
+*.swo
+*~
+
+# Build and test output
+/publish/
+/artifacts/
+/TestResults/
+*.coverage
+*.trx
+
+# Sensitive policies and local configuration
+policies/*_prod_*.json
+policies/*_secret_*.json
+appsettings.Local.json
+appsettings.Development.json
+
+# Temporary files unrelated to Winknow V7.0
+tmp/

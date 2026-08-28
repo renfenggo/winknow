@@ -1,0 +1,68 @@
+{
+  "Version": "7.0.0",
+  "PolicyId": "default-classroom-v1",
+  "CreatedAt": "2026-08-07T00:00:00Z",
+  "Description": "编程课堂默认策略 - 适用于 V7.0",
+  "SoftwareControl": {
+    "Whitelist": {
+      "ByPublisher": [
+        "Microsoft Corporation",
+        "Microsoft"
+      ],
+      "ByPath": [
+        {
+          "Path": "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+          "Hash": "",
+          "Description": "VS Code 主程序"
+        },
+        {
+          "Path": "C:\\Dev-Cpp\\devcpp.exe",
+          "Hash": "",
+          "Description": "Dev-C++ IDE"
+        }
+      ],
+      "ByHash": []
+    },
+    "StudentOutput": {
+      "AllowedDirectories": [
+        "C:\\Users\\*\\source\\repos\\**",
+        "C:\\Dev-Cpp\\Projects\\**"
+      ],
+      "MaxValidityHours": 2,
+      "MaxFileSizeMB": 50
+    },
+    "HighRiskInterpreters": {
+      "Blocked": [
+        "powershell.exe",
+        "wscript.exe",
+        "cscript.exe",
+        "mshta.exe",
+        "regedit.exe",
+        "mmc.exe"
+      ]
+    }
+  },
+  "NetworkControl": {
+    "WebsiteWhitelist": {
+      "Domains": [
+        "luogu.com.cn",
+        "*.luogu.com.cn",
+        "cdn.luogu.com.cn",
+        "www.luogu.com.cn"
+      ]
+    },
+    "Proxy": {
+      "Allowed": false,
+      "ForceSystemProxy": true
+    }
+  },
+  "UsbControl": {
+    "MassStorage": {
+      "Enabled": false,
+      "AdminOverride": true
+    },
+    "HidDevices": {
+      "Enabled": true
+    }
+  }
+}
