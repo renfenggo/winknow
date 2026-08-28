@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Winknow.Core;
 using Winknow.Ipc;
+using Winknow.ProcessControl;
 
 namespace Winknow.ControlService;
 
@@ -15,6 +16,10 @@ internal sealed class Worker : BackgroundService
     private readonly ILogger<Worker> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private IpcServer? _ipcServer;
+    private WmiProcessMonitor? _wmiMonitor;
+    private ProcessScanner? _scanner;
+    private ProcessJudge? _judge;
+    private ProcessTerminator? _terminator;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
     {
@@ -24,22 +29,42 @@ internal sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // 1. 启动 IPC 服务端
+        // 1. 初始化进程管控
+        var whitelist = WhitelistRuleSet.CreateDefault();
+        _judge = new ProcessJudge(whitelist, _loggerFactory.CreateLogger<ProcessJudge>());
+        _terminator = new ProcessTerminator(_loggerFactory.CreateLogger<ProcessTerminator>());
+
+        // 2. 启动 IPC 服务端
         var deviceId = DeviceId.Generate();
         var authenticator = IpcAuthenticator.CreateForControlService(deviceId);
         _ipcServer = new IpcServer(
             IpcConstants.ControlPipeName,
             authenticator,
             _loggerFactory.CreateLogger<IpcServer>());
-
         _ipcServer.MessageReceived += OnMessageReceived;
-        _ = _ipcServer.StartAsync();
-        _logger.LogInformation("ControlService IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
+        await _ipcServer.StartAsync();
+        _logger.LogInformation("IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
 
-        // 2. 启动会话监控
-        _ = SessionMonitorLoopAsync(stoppingToken);
+        // 3. 启动 WMI 进程实时监听
+        _wmiMonitor = new WmiProcessMonitor(_loggerFactory.CreateLogger<WmiProcessMonitor>());
+        _wmiMonitor.ProcessStarted += OnProcessStarted;
+        _wmiMonitor.Start();
+        _logger.LogInformation("WMI ProcessStartTrace monitor started");
 
-        // TODO 第3周：启动 WMI ProcessStartTrace + 全量进程扫描 + 周期扫描
+        // 4. 启动全量扫描 + 周期扫描
+        _scanner = new ProcessScanner(
+            scanInterval: TimeSpan.FromSeconds(2),
+            logger: _loggerFactory.CreateLogger<ProcessScanner>());
+        _scanner.ScanCompleted += OnScanCompleted;
+
+        // 启动时执行一次全量扫描
+        _logger.LogInformation("Performing initial full process scan...");
+        _scanner.ScanAll();
+
+        // 启动周期扫描
+        _scanner.StartPeriodicScan();
+        _logger.LogInformation("Periodic scan started (interval: 2s)");
+
         // TODO 第4周：加载并验证策略文件
         // TODO 第5周：配置服务 DACL + 文件 ACL + 注册表 ACL
 
@@ -53,12 +78,66 @@ internal sealed class Worker : BackgroundService
         }
         finally
         {
+            _wmiMonitor?.Dispose();
+            _scanner?.Dispose();
+            authenticator.Dispose();
+
             if (_ipcServer is not null)
             {
                 _ipcServer.MessageReceived -= OnMessageReceived;
                 await _ipcServer.StopAsync();
             }
-            authenticator.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// WMI 检测到新进程启动时的处理。
+    /// </summary>
+    private void OnProcessStarted(ProcessInfo info)
+    {
+        if (_judge is null || _terminator is null)
+        {
+            return;
+        }
+
+        var result = _judge.Judge(info);
+        if (!result.IsSuccess)
+        {
+            _logger.LogWarning("Blocking process: {Pid} {Name} {Path} - {Reason}",
+                info.ProcessId, info.ProcessName, info.FilePath, result.ErrorMessage);
+            _terminator.Terminate(info.ProcessId, result.ErrorMessage ?? "Blocked by policy");
+        }
+    }
+
+    /// <summary>
+    /// 周期扫描完成时的处理。
+    /// </summary>
+    private void OnScanCompleted(IReadOnlyList<ProcessInfo> processes)
+    {
+        if (_judge is null || _terminator is null)
+        {
+            return;
+        }
+
+        var blockedCount = 0;
+        foreach (var info in processes)
+        {
+            var result = _judge.Judge(info);
+            if (!result.IsSuccess)
+            {
+                _logger.LogWarning("Blocking process (scan): {Pid} {Name} - {Reason}",
+                    info.ProcessId, info.ProcessName, result.ErrorMessage);
+                if (_terminator.Terminate(info.ProcessId, result.ErrorMessage ?? "Blocked by scan"))
+                {
+                    blockedCount++;
+                }
+            }
+        }
+
+        if (blockedCount > 0)
+        {
+            _logger.LogWarning("Scan completed: {Total} processes, {Blocked} blocked",
+                processes.Count, blockedCount);
         }
     }
 
@@ -66,20 +145,6 @@ internal sealed class Worker : BackgroundService
     {
         _logger.LogDebug("Received IPC message: Type={MessageType} RequestId={RequestId}",
             message.MessageType, message.RequestId);
-
-        // TODO 第3周：根据消息类型处理策略查询、会话状态等
         return Task.CompletedTask;
-    }
-
-    private async Task SessionMonitorLoopAsync(CancellationToken cancellationToken)
-    {
-        // TODO 第3周：实现 WTS_SESSION_LOGON/LOGOFF 事件监听
-        // TODO 第3周：用户登录时启动 SessionAgent（由独立的 SessionLauncher 负责）
-        // TODO 第3周：用户注销时向 SessionAgent 发送退出信号
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            await Task.Delay(5000, cancellationToken);
-        }
     }
 }

@@ -7,6 +7,9 @@ obj/
 *.db
 *.log
 *.tmp
+
+# 临时目录
+tmp/
 *.temp
 *.cache
 *.pdb

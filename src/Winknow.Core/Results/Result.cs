@@ -101,4 +101,9 @@ public enum ErrorCode
     BiosPasswordNotSet = 6002,
     /// <summary>Booting from USB is enabled.</summary>
     UsbBootEnabled = 6003,
+    /// <summary>A process was blocked by the software control engine.</summary>
+    ProcessBlocked = 7001,
+    /// <summary>A process could not be terminated.</summary>
+    ProcessTerminationFailed = 7002,
 }
+
