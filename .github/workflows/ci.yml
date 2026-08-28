@@ -1,0 +1,48 @@
+name: Winknow V7.0 CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: windows-latest
+
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      DOTNET_GENERATE_ASPNETCORE_WORKLOAD_ARGS: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Display .NET info
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore WinknowV7.sln
+
+      - name: Build (Release)
+        run: dotnet build WinknowV7.sln --configuration Release --no-restore --nologo
+
+      - name: Test (Release)
+        run: dotnet test WinknowV7.sln --configuration Release --no-build --nologo --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/**'
+          if-no-files-found: ignore

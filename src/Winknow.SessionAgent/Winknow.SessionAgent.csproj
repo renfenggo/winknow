@@ -1,11 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-</Project>
+  <ItemGroup>
+    <ProjectReference Include="..\Winknow.Core\Winknow.Core.csproj" />
+    <ProjectReference Include="..\Winknow.Ipc\Winknow.Ipc.csproj" />
+  </ItemGroup>
 
+</Project>
