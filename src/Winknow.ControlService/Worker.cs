@@ -1,6 +1,9 @@
 using Microsoft.Extensions.Logging;
 using Winknow.Core;
+using Winknow.DeviceSecurity;
 using Winknow.Ipc;
+using Winknow.Network;
+using Winknow.Policy;
 using Winknow.ProcessControl;
 
 namespace Winknow.ControlService;
@@ -20,6 +23,10 @@ internal sealed class Worker : BackgroundService
     private ProcessScanner? _scanner;
     private ProcessJudge? _judge;
     private ProcessTerminator? _terminator;
+    private HostsProtector? _hostsProtector;
+    private WebsiteFilter? _websiteFilter;
+    private UsbStorageController? _usbController;
+    private PolicyFile? _policy;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
     {
@@ -65,8 +72,52 @@ internal sealed class Worker : BackgroundService
         _scanner.StartPeriodicScan();
         _logger.LogInformation("Periodic scan started (interval: 2s)");
 
-        // TODO 第4周：加载并验证策略文件
-        // TODO 第5周：配置服务 DACL + 文件 ACL + 注册表 ACL
+        // 5. 加载策略文件
+        var policyPath = Path.Combine(
+            AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
+        if (File.Exists(policyPath))
+        {
+            var policyLoader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
+            var policyResult = policyLoader.Load(policyPath);
+            if (policyResult.IsSuccess)
+            {
+                _policy = policyResult.Data!;
+                _logger?.LogInformation("Policy loaded: {PolicyId} v{Version}",
+                    _policy.PolicyId, _policy.Version);
+
+                // 6. 应用网络管控
+                _websiteFilter = new WebsiteFilter(_loggerFactory.CreateLogger<WebsiteFilter>());
+                _websiteFilter.LoadFromPolicy(_policy.NetworkControl.WebsiteWhitelist);
+                _logger?.LogInformation("Website filter loaded: {Count} domains",
+                    _policy.NetworkControl.WebsiteWhitelist.Domains.Count);
+
+                _hostsProtector = new HostsProtector(_loggerFactory.CreateLogger<HostsProtector>());
+                _hostsProtector.Initialize();
+                _hostsProtector.StartMonitoring();
+                _logger?.LogInformation("Hosts file protection started");
+
+                // 7. 应用 USB 管控
+                _usbController = new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
+                if (!_policy.UsbControl.MassStorage.Enabled)
+                {
+                    _usbController.Disable();
+                    _logger?.LogWarning("USB Mass Storage disabled by policy");
+                }
+                else
+                {
+                    _usbController.Enable();
+                    _logger?.LogInformation("USB Mass Storage enabled by policy");
+                }
+            }
+            else
+            {
+                _logger?.LogError("Failed to load policy: {Error}", policyResult.ErrorMessage);
+            }
+        }
+        else
+        {
+            _logger?.LogWarning("Policy file not found at {Path}, using defaults", policyPath);
+        }
 
         try
         {
@@ -80,6 +131,7 @@ internal sealed class Worker : BackgroundService
         {
             _wmiMonitor?.Dispose();
             _scanner?.Dispose();
+            _hostsProtector?.Dispose();
             authenticator.Dispose();
 
             if (_ipcServer is not null)
