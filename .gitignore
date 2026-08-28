@@ -35,6 +35,3 @@ policies/*_prod_*.json
 policies/*_secret_*.json
 appsettings.Local.json
 appsettings.Development.json
-
-# Temporary files unrelated to Winknow V7.0
-tmp/
