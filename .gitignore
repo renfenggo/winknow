@@ -29,6 +29,7 @@ tmp/
 # Build and test output
 /publish/
 /artifacts/
+/installer/payload/
 /TestResults/
 *.coverage
 *.trx
