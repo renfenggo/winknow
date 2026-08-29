@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -9,7 +9,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.ServiceProcess.ServiceController" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Winknow.Core\Winknow.Core.csproj" />
+    <ProjectReference Include="..\Winknow.Security\Winknow.Security.csproj" />
+    <ProjectReference Include="..\Winknow.Logging\Winknow.Logging.csproj" />
   </ItemGroup>
 
 </Project>

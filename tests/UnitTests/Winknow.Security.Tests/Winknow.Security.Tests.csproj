@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Winknow.Security\Winknow.Security.csproj" />
+    <ProjectReference Include="..\..\..\src\Winknow.Logging\Winknow.Logging.csproj" />
   </ItemGroup>
 
   <ItemGroup>

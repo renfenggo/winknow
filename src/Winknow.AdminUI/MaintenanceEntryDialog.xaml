@@ -1,0 +1,40 @@
+<Window x:Class="Winknow.AdminUI.MaintenanceEntryDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="进入维护模式" Height="360" Width="420"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" ShowInTaskbar="False">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="双因子（密码 + TOTP）" FontWeight="Bold" Margin="0,0,0,4"/>
+
+        <TextBlock Grid.Row="1" Text="维护密码:" Margin="0,4,0,2"/>
+        <PasswordBox Grid.Row="1" x:Name="PasswordBox" Margin="0,22,0,0"/>
+
+        <TextBlock Grid.Row="2" Text="TOTP 6 位码:" Margin="0,8,0,2"/>
+        <TextBox Grid.Row="2" x:Name="TotpBox" Margin="0,26,0,0" MaxLength="6"/>
+
+        <TextBlock Grid.Row="3" Text="或 紧急恢复码（二选一）" FontWeight="Bold" Margin="0,12,0,4"/>
+        <TextBox Grid.Row="4" x:Name="RecoveryCodeBox" Margin="0,0,0,4"/>
+
+        <TextBlock Grid.Row="5" Text="超时（分钟）:" Margin="0,4,0,2"/>
+        <TextBox Grid.Row="5" x:Name="TimeoutBox" Margin="0,22,0,0" Text="15" MaxLength="3"/>
+
+        <TextBlock Grid.Row="6" x:Name="ErrorText" Foreground="Red" Margin="0,12,0,0" TextWrapping="Wrap"/>
+
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="进入维护" Width="100" Margin="0,0,8,0" Click="OnEnterClick" IsDefault="True"/>
+            <Button Content="取消" Width="80" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>
