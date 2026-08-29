@@ -86,4 +86,17 @@ public static class Constants
         /// <summary>Gets the heartbeat lease file name (under ProgramData\Winknow).</summary>
         public const string HeartbeatFileName = "control_heartbeat.json";
     }
+
+    /// <summary>Defines device security module defaults (V7.0 week 11).</summary>
+    public static class DeviceSecurity
+    {
+        /// <summary>Gets the device security data directory name (under ProgramData\Winknow).</summary>
+        public const string DataDirName = "device_security";
+
+        /// <summary>Gets the verification record file name.</summary>
+        public const string VerificationFileName = "verification.json";
+
+        /// <summary>Gets the manual checklist file name.</summary>
+        public const string ChecklistFileName = "checklist.json";
+    }
 }

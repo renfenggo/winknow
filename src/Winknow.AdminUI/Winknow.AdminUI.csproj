@@ -16,6 +16,7 @@
     <ProjectReference Include="..\Winknow.Core\Winknow.Core.csproj" />
     <ProjectReference Include="..\Winknow.Security\Winknow.Security.csproj" />
     <ProjectReference Include="..\Winknow.Logging\Winknow.Logging.csproj" />
+    <ProjectReference Include="..\Winknow.DeviceSecurity\Winknow.DeviceSecurity.csproj" />
   </ItemGroup>
 
 </Project>
