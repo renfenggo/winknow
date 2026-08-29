@@ -11,14 +11,28 @@ public sealed class ProcessJudge
 {
     private readonly ILogger<ProcessJudge>? _logger;
     private readonly WhitelistRuleSet _whitelist;
+    private readonly HashSet<string> _highRiskInterpreters;
+
+    /// <summary>默认高风险解释器黑名单（与 default_policy_v7.0.json 一致）。</summary>
+    private static readonly HashSet<string> DefaultHighRiskInterpreters = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "powershell.exe", "wscript.exe", "cscript.exe", "mshta.exe", "regedit.exe", "mmc.exe"
+    };
 
     /// <summary>创建综合判断引擎。</summary>
     /// <param name="whitelist">白名单规则集。</param>
     /// <param name="logger">可选的日志记录器。</param>
-    public ProcessJudge(WhitelistRuleSet whitelist, ILogger<ProcessJudge>? logger = null)
+    /// <param name="highRiskInterpreters">可选的高风险解释器黑名单（为空时使用默认列表）。</param>
+    public ProcessJudge(
+        WhitelistRuleSet whitelist,
+        ILogger<ProcessJudge>? logger = null,
+        IReadOnlyCollection<string>? highRiskInterpreters = null)
     {
         _whitelist = whitelist ?? throw new ArgumentNullException(nameof(whitelist));
         _logger = logger;
+        _highRiskInterpreters = highRiskInterpreters is null
+            ? DefaultHighRiskInterpreters
+            : new HashSet<string>(highRiskInterpreters, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -41,6 +55,15 @@ public sealed class ProcessJudge
             _logger?.LogWarning("Process blocked (path not allowed): {Pid} {Path}",
                 info.ProcessId, info.FilePath);
             return Result<ProcessInfo>.Failure(ErrorCode.ProcessBlocked, $"Path not in whitelist: {info.FilePath}");
+        }
+
+        // 2.5 高风险解释器黑名单检查（即使路径在白名单也阻止）
+        if (IsHighRiskInterpreter(info.ProcessName))
+        {
+            _logger?.LogWarning("Process blocked (high-risk interpreter): {Pid} {Name}",
+                info.ProcessId, info.ProcessName);
+            return Result<ProcessInfo>.Failure(
+                ErrorCode.ProcessBlocked, $"High-risk interpreter blocked: {info.ProcessName}");
         }
 
         // 3. Hash 校验
@@ -108,6 +131,24 @@ public sealed class ProcessJudge
         };
 
         return criticalProcesses.Contains(info.ProcessName);
+    }
+
+    /// <summary>
+    /// 判断是否为高风险解释器（即使路径在白名单也阻止）。
+    /// 注意：作为阻止依据（黑名单），非放行依据。
+    /// </summary>
+    private bool IsHighRiskInterpreter(string processName)
+    {
+        if (string.IsNullOrEmpty(processName))
+        {
+            return false;
+        }
+
+        // 进程名可能含或不含 .exe 后缀，统一比较
+        var name = processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? processName
+            : processName + ".exe";
+        return _highRiskInterpreters.Contains(name);
     }
 
     /// <summary>
