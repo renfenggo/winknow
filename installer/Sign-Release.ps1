@@ -102,4 +102,27 @@ if ($failed.Count -gt 0) {
 }
 
 Write-Host ("==> 签名+验签全部通过（{0} 个文件）" -f $targets.Count) -ForegroundColor Green
+
+# ── manifest 刷新：签名改变文件字节，清单必须描述最终分发字节 ──
+# 场景：单独对已出清单的产物目录签名（非 Build -Sign 流水线）时，
+#       release_manifest.json 中的 SHA256 已过期，此处原地刷新。
+if (Test-Path $Path -PathType Container) {
+    $manifestPath = Join-Path $Path 'release_manifest.json'
+    if (Test-Path $manifestPath) {
+        $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $refreshed = 0
+        foreach ($e in $m.files) {
+            $p = Join-Path $Path $e.path
+            if (Test-Path $p) {
+                $e.sha256 = (Get-FileHash $p -Algorithm SHA256).Hash.ToLowerInvariant()
+                $e.size = (Get-Item $p).Length
+                $refreshed++
+            }
+        }
+        $m.generated = (Get-Date).ToUniversalTime().ToString('o')
+        $m | ConvertTo-Json -Depth 4 | Set-Content $manifestPath -Encoding utf8
+        Write-Host ("==> 已刷新 release_manifest.json（{0}/{1} 项哈希更新）" -f $refreshed, $m.files.Count) -ForegroundColor Green
+    }
+}
+
 Write-Host "生产分发提醒：正式发布须使用组织 EV/OV 代码签名证书（对应第 9 周密钥清单 CodeSigning 条目），测试证书构建不得出机房。" -ForegroundColor Yellow

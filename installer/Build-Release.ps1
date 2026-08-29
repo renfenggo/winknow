@@ -62,7 +62,17 @@ $policyDir = Join-Path $OutputRoot 'policy'
 New-Item -ItemType Directory -Force -Path $policyDir | Out-Null
 Copy-Item "$solutionRoot\policies\default_policy_v7.0.json" $policyDir -Force
 
-# ── 3. SHA256 清单（与 RecoveryVault manifest 同格式约定） ─────
+# ── 3. 签名（可选）——必须在生成清单之前：签名改变文件字节，──
+#    release_manifest.json 必须描述最终分发字节（灰度 Stage 0 核验教训）
+if ($Sign) {
+    Write-Step "调用 Sign-Release.ps1"
+    $signArgs = @{ Path = $OutputRoot }
+    if ($CertThumbprint) { $signArgs.CertThumbprint = $CertThumbprint }
+    if ($TestCert) { $signArgs.TestCert = $true }
+    & "$PSScriptRoot\Sign-Release.ps1" @signArgs
+}
+
+# ── 4. SHA256 清单（与 RecoveryVault manifest 同格式约定） ─────
 Write-Step "生成 SHA256 清单 release_manifest.json"
 $files = Get-ChildItem $OutputRoot -Recurse -File |
     Where-Object { $_.Name -ne 'release_manifest.json' }
@@ -82,15 +92,6 @@ $manifest = [PSCustomObject]@{
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content "$OutputRoot\release_manifest.json" -Encoding utf8
 Write-Host ("清单含 {0} 个文件" -f $entries.Count) -ForegroundColor Green
-
-# ── 4. 签名（可选） ───────────────────────────────────────────
-if ($Sign) {
-    Write-Step "调用 Sign-Release.ps1"
-    $signArgs = @{ Path = $OutputRoot }
-    if ($CertThumbprint) { $signArgs.CertThumbprint = $CertThumbprint }
-    if ($TestCert) { $signArgs.TestCert = $true }
-    & "$PSScriptRoot\Sign-Release.ps1" @signArgs
-}
 
 Write-Step "完成。payload：$OutputRoot"
 Write-Host "下一步：ISCC.exe `"$PSScriptRoot\WinknowSetup.iss`" 生成安装包（dist\）"
