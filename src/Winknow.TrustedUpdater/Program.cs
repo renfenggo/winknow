@@ -21,6 +21,10 @@ internal static class Program
     private static readonly string DeployRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "Winknow", "deploy");
+
+    private static readonly string DataDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "Winknow");
     private const string ProductId = "Winknow.V7";
 
     private static readonly string[] ManagedServices = ["Winknow Control Service", "Winknow Guard Service"];
@@ -82,14 +86,28 @@ internal static class Program
         });
 
         Console.WriteLine($"应用更新包: {packagePath}");
-        var r = orchestrator.Apply(packagePath);
-        if (r.IsSuccess)
+
+        // 更新模式标志：阻止 GuardService 在 Stop→切换→Start 窗口内拉起服务（防交叉拉起）
+        if (!UpdateModeFlag.TryEnter(DataDir))
         {
-            Console.WriteLine("更新成功");
-            return 0;
+            Console.Error.WriteLine("[ERROR] 已有更新正在进行，拒绝并发更新");
+            return 1;
         }
-        Console.Error.WriteLine($"[ERROR] {r.ErrorMessage}");
-        return 1;
+        try
+        {
+            var r = orchestrator.Apply(packagePath);
+            if (r.IsSuccess)
+            {
+                Console.WriteLine("更新成功");
+                return 0;
+            }
+            Console.Error.WriteLine($"[ERROR] {r.ErrorMessage}");
+            return 1;
+        }
+        finally
+        {
+            UpdateModeFlag.Exit(DataDir);
+        }
     }
 
     private static int RunRollback()
@@ -103,14 +121,26 @@ internal static class Program
             StartServices = StartManagedServices
         });
 
-        var r = orchestrator.Rollback();
-        if (r.IsSuccess)
+        if (!UpdateModeFlag.TryEnter(DataDir))
         {
-            Console.WriteLine("回滚完成");
-            return 0;
+            Console.Error.WriteLine("[ERROR] 已有更新正在进行，拒绝并发回滚");
+            return 1;
         }
-        Console.Error.WriteLine($"[ERROR] {r.ErrorMessage}");
-        return 1;
+        try
+        {
+            var r = orchestrator.Rollback();
+            if (r.IsSuccess)
+            {
+                Console.WriteLine("回滚完成");
+                return 0;
+            }
+            Console.Error.WriteLine($"[ERROR] {r.ErrorMessage}");
+            return 1;
+        }
+        finally
+        {
+            UpdateModeFlag.Exit(DataDir);
+        }
     }
 
     private static int RunStatus()

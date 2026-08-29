@@ -58,4 +58,32 @@ public static class Constants
         /// <summary>Gets the audit database file name.</summary>
         public const string DatabaseFileName = "audit.db";
     }
+
+    /// <summary>Defines guard daemon defaults (V7.0 week 10).</summary>
+    public static class Guard
+    {
+        /// <summary>Gets the heartbeat write interval of the monitored service.</summary>
+        public const int HeartbeatIntervalSeconds = 5;
+
+        /// <summary>Gets the lease timeout: heartbeat older than this means the peer is dead or hung.</summary>
+        public const int LeaseTimeoutSeconds = 15;
+
+        /// <summary>Gets the sliding window for restart throttling.</summary>
+        public const int ThrottleWindowMinutes = 10;
+
+        /// <summary>Gets the maximum restarts allowed within the throttle window.</summary>
+        public const int MaxRestartsPerWindow = 5;
+
+        /// <summary>Gets the exponential backoff base delay in seconds.</summary>
+        public const int BackoffBaseSeconds = 1;
+
+        /// <summary>Gets the exponential backoff cap in seconds.</summary>
+        public const int BackoffCapSeconds = 60;
+
+        /// <summary>Gets the crash-loop test iteration count required by the plan.</summary>
+        public const int CrashLoopTestIterations = 20;
+
+        /// <summary>Gets the heartbeat lease file name (under ProgramData\Winknow).</summary>
+        public const string HeartbeatFileName = "control_heartbeat.json";
+    }
 }

@@ -43,6 +43,8 @@ internal sealed class Worker : BackgroundService
     private LogCheckpointSigner? _checkpointSigner;
     private EventLogAnchor? _eventLogAnchor;
     private DataRetentionManager? _retentionManager;
+    private SingleInstanceGuard? _instanceGuard;
+    private HeartbeatLease? _heartbeatLease;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
     {
@@ -52,6 +54,22 @@ internal sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // 第 10 周单实例守卫：全局 Mutex 竞争唯一运行权，拿不到锁说明已有实例在运行，
+        // 本实例直接退出（防更新/守护交叉拉起产生双进程）
+        var dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
+        _instanceGuard = new SingleInstanceGuard(@"Global\Winknow_ControlService_Instance", dataDir);
+        if (!_instanceGuard.IsAcquired)
+        {
+            var owner = _instanceGuard.ReadOwner();
+            _logger.LogCritical(
+                "另一个 ControlService 实例正在运行（PID={OwnerPid}，{OwnerPath}），本实例退出",
+                owner?.Pid, owner?.ExePath);
+            _instanceGuard.Dispose();
+            _instanceGuard = null;
+            return; // 不继续初始化任何管控设施：双实例会导致策略重复执行与 IPC 端口竞争
+        }
+
         // 0. 自保护：进程 DACL + 服务 DACL + SCM 失败恢复 + SafeBoot 注册（幂等）
         // 服务级保护也可由 RecoveryTool protect 在安装期应用；此处确保运行期自硬化
         ApplySelfProtection();
@@ -267,9 +285,20 @@ internal sealed class Worker : BackgroundService
             }
         }
 
+        // 11. 心跳租约：周期续签供 GuardService 判定真实活性（第 10 周）
+        //     替代纯服务状态检测：本循环挂起时租约自然过期，守护将识别"Running 但僵死"
+        _heartbeatLease = new HeartbeatLease(dataDir);
+        var processStartedAt = DateTimeOffset.UtcNow;
+        _logger?.LogInformation("Heartbeat lease writer started (interval: {Interval}s)",
+            Constants.Guard.HeartbeatIntervalSeconds);
+
         try
         {
-            await Task.Delay(Timeout.Infinite, stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                _ = _heartbeatLease.Write(Environment.ProcessId, ServiceName, Constants.Version, processStartedAt);
+                await Task.Delay(TimeSpan.FromSeconds(Constants.Guard.HeartbeatIntervalSeconds), stoppingToken);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -292,6 +321,10 @@ internal sealed class Worker : BackgroundService
                 _ipcServer.MessageReceived -= OnMessageReceived;
                 await _ipcServer.StopAsync();
             }
+
+            // 正常退出时清除租约：守护立即感知停止，无需等待超时
+            _heartbeatLease?.Clear();
+            _instanceGuard?.Dispose();
         }
     }
 
