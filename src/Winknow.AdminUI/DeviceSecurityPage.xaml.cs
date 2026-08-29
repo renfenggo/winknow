@@ -97,7 +97,8 @@ public partial class DeviceSecurityPage : UserControl
             $"固件信息：{f.BiosVendor} {f.BiosVersion}（{f.BiosReleaseDate}） | " +
             $"模式：{f.FirmwareType} | 主板：{f.BoardVendor} {f.BoardModel} | " +
             $"整机：{f.SystemVendor} {f.SystemModel} | " +
-            $"系统盘：磁盘 {_report.BootConfig.SystemDiskIndex?.ToString() ?? "?"}（{_report.BootConfig.PartitionStyle}）";
+            $"系统盘：磁盘 {_report.BootConfig.SystemDiskIndex?.ToString() ?? "?"}（{_report.BootConfig.PartitionStyle}）\n" +
+            $"品牌匹配：{_report.VendorDisplayName}（{_report.VendorHotKeys}）——核验时按报告『品牌 BIOS 设置指引』操作";
 
         ChecksGrid.ItemsSource = _report.Checks.Select(c => new CheckRow
         {

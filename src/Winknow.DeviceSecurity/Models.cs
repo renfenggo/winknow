@@ -200,6 +200,15 @@ namespace Winknow.DeviceSecurity;
         /// <summary>既有核验记录是否与当前固件匹配（变化失效判定结果）。</summary>
         [JsonPropertyName("verificationCurrent")] public bool? VerificationCurrent { get; set; }
 
+        /// <summary>品牌匹配键（lenovo/dell/hp/asus/generic，第 12 周兼容矩阵联动）。</summary>
+        [JsonPropertyName("vendorKey")] public string VendorKey { get; set; } = "generic";
+
+        /// <summary>品牌显示名（如"联想（Lenovo/ThinkCentre/启天）"）。</summary>
+        [JsonPropertyName("vendorDisplayName")] public string VendorDisplayName { get; set; } = string.Empty;
+
+        /// <summary>该品牌 BIOS/启动菜单热键摘要（如"BIOS: F1，启动菜单: F12"）。</summary>
+        [JsonPropertyName("vendorHotKeys")] public string VendorHotKeys { get; set; } = string.Empty;
+
         /// <summary>报告生成时间（ISO 8601 UTC）。</summary>
         [JsonPropertyName("generatedAt")] public string GeneratedAt { get; set; } = string.Empty;
     }

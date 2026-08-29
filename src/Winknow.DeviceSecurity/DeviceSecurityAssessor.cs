@@ -125,6 +125,15 @@ public sealed class DeviceSecurityAssessor
             VerificationCurrent = verificationCurrent,
             GeneratedAt = DateTimeOffset.UtcNow.ToString("O")
         };
+
+        // 品牌兼容矩阵匹配（第 12 周）：报告与 UI 按品牌给出设置路径指引
+        var profile = BiosCompatibilityMatrix.Match(firmware.BiosVendor, firmware.SystemVendor);
+        report.VendorKey = profile.Key;
+        report.VendorDisplayName = profile.DisplayName;
+        report.VendorHotKeys = string.IsNullOrEmpty(profile.BootMenuHotKey)
+            ? $"BIOS: {profile.BiosHotKey}"
+            : $"BIOS: {profile.BiosHotKey}，启动菜单: {profile.BootMenuHotKey}";
+
         DeviceSecurityScorer.Score(report);
 
         _logger?.LogInformation(

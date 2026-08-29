@@ -109,6 +109,29 @@ public static class ReportExporter
         });
         sb.AppendLine();
 
+        sb.AppendLine("## 六、品牌 BIOS 设置指引（人工核验用）");
+        sb.AppendLine();
+        var profile = BiosCompatibilityMatrix.Match(
+            report.Firmware.BiosVendor, report.Firmware.SystemVendor);
+        var hotKeys = string.IsNullOrEmpty(profile.BootMenuHotKey)
+            ? profile.BiosHotKey
+            : $"{profile.BiosHotKey}；启动菜单 {profile.BootMenuHotKey}";
+        sb.AppendLine($"- 匹配品牌：**{profile.DisplayName}**（{hotKeys}）");
+        if (!string.IsNullOrEmpty(profile.Notes))
+        {
+            sb.AppendLine($"- 品牌备注：{profile.Notes}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("| 检查项 | 该品牌菜单路径 | 注意事项 |");
+        sb.AppendLine("|--------|----------------|----------|");
+        foreach (var c in report.Checks.Where(c => c.Category == "manual"
+            || c.Id == DeviceSecurityScorer.CheckSecureBoot))
+        {
+            var p = BiosCompatibilityMatrix.FindPath(profile, c.Id);
+            sb.AppendLine($"| {c.Title} | {p?.Path ?? "见机型手册"} | {p?.Note ?? string.Empty} |");
+        }
+        sb.AppendLine();
+
         sb.AppendLine("---");
         sb.AppendLine();
         sb.AppendLine($"> {BitLockerBoundaryNote}");
