@@ -5,6 +5,7 @@ using Winknow.Ipc;
 using Winknow.Network;
 using Winknow.Policy;
 using Winknow.ProcessControl;
+using Winknow.Security;
 
 namespace Winknow.ControlService;
 
@@ -16,6 +17,9 @@ namespace Winknow.ControlService;
 /// </summary>
 internal sealed class Worker : BackgroundService
 {
+    // 服务名：必须与 Program.cs 中 AddWindowsService(options => options.ServiceName) 保持一致
+    private const string ServiceName = "Winknow Control Service";
+
     private readonly ILogger<Worker> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private IpcServer? _ipcServer;
@@ -36,6 +40,10 @@ internal sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // 0. 自保护：进程 DACL + 服务 DACL + SCM 失败恢复 + SafeBoot 注册（幂等）
+        // 服务级保护也可由 RecoveryTool protect 在安装期应用；此处确保运行期自硬化
+        ApplySelfProtection();
+
         // 1. 加载策略文件（单一可信源：白名单/高风险黑名单/网络/USB 均来自此）
         var policyPath = Path.Combine(
             AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
@@ -200,6 +208,31 @@ internal sealed class Worker : BackgroundService
             _logger.LogWarning("Scan completed: {Total} processes, {Blocked} blocked",
                 processes.Count, blockedCount);
         }
+    }
+
+    /// <summary>
+    /// 应用服务自保护（幂等）：
+    /// 1. 进程 DACL：防止标准用户 taskkill 本服务进程
+    /// 2. 服务 DACL：防止标准用户 Stop-Service / sc stop
+    /// 3. SCM 失败恢复：异常退出后自动重启
+    /// 4. SafeBoot 注册：安全模式下正常启动
+    /// 任一失败仅记录日志，不阻断主流程。
+    /// </summary>
+    private void ApplySelfProtection()
+    {
+        // 进程 DACL：LocalSystem 可直接应用
+        var proc = ProcessSecurity.ProtectCurrentProcess(_logger);
+        _logger.LogInformation("Process DACL: {Status}", proc.IsSuccess ? "applied" : proc.ErrorMessage);
+
+        // 服务级保护：需 SCM 句柄，LocalSystem 具备权限
+        var dacl = ServiceSecurity.ApplyServiceProtection(ServiceName, _logger);
+        _logger.LogInformation("Service DACL: {Status}", dacl.IsSuccess ? "applied" : dacl.ErrorMessage);
+
+        var recovery = ServiceRecovery.ApplyServiceRecovery(ServiceName, _logger);
+        _logger.LogInformation("Service recovery: {Status}", recovery.IsSuccess ? "configured" : recovery.ErrorMessage);
+
+        var safeBoot = SafeBootRegistrar.Register(ServiceName, "Winknow 核心管控服务", _logger);
+        _logger.LogInformation("SafeBoot registration: {Status}", safeBoot.IsSuccess ? "registered" : safeBoot.ErrorMessage);
     }
 
     private Task OnMessageReceived(IpcMessage message, CancellationToken cancellationToken)
