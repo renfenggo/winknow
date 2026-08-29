@@ -1,14 +1,23 @@
 using Winknow.Core.Results;
+using Winknow.Policy;
 using Winknow.ProcessControl;
 
 namespace Winknow.ProcessControl.Tests;
 
 /// <summary>
-/// 综合判断引擎测试。
+/// 综合判断引擎测试（白名单从策略文件加载，验证统一源）。
 /// </summary>
 public class ProcessJudgeTests
 {
-    private readonly ProcessJudge _judge = new(WhitelistRuleSet.CreateDefault());
+    private readonly ProcessJudge _judge;
+
+    public ProcessJudgeTests()
+    {
+        var policy = CreateTestPolicy();
+        _judge = new ProcessJudge(
+            WhitelistRuleSet.FromPolicy(policy),
+            highRiskInterpreters: policy.SoftwareControl.HighRiskInterpreters.Blocked);
+    }
 
     [Fact(DisplayName = "系统关键进程直接放行")]
     public void Judge_SystemCritical_Allowed()
@@ -82,13 +91,13 @@ public class ProcessJudgeTests
         Assert.Equal(ErrorCode.ProcessBlocked, result.ErrorCode);
     }
 
-    [Fact(DisplayName = "危险命令行阻止")]
+    [Fact(DisplayName = "高风险解释器阻止（含危险命令行）")]
     public void Judge_DangerousCommandLine_Blocked()
     {
         var info = new ProcessInfo
         {
             ProcessId = 5000,
-            ProcessName = "powershell",
+            ProcessName = "powershell.exe",
             FilePath = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
             CommandLine = "powershell -EncodedCommand SGVsbG8="
         };
@@ -112,7 +121,7 @@ public class ProcessJudgeTests
         Assert.True(result.IsSuccess);
     }
 
-    [Fact(DisplayName = "学生编译产物放行")]
+    [Fact(DisplayName = "学生编译产物放行（从策略 StudentOutput 加载）")]
     public void Judge_StudentBuild_Allowed()
     {
         var info = new ProcessInfo
@@ -182,5 +191,38 @@ public class ProcessJudgeTests
         var result = judge.Judge(info);
         Assert.False(result.IsSuccess);
         Assert.Equal(ErrorCode.ProcessBlocked, result.ErrorCode);
+    }
+
+    /// <summary>构造测试用策略文件（内存，含课堂软件与高风险黑名单）。</summary>
+    private static PolicyFile CreateTestPolicy()
+    {
+        return new PolicyFile
+        {
+            Version = "7.0.0",
+            PolicyId = "test-judge",
+            SoftwareControl = new SoftwareControlSection
+            {
+                Whitelist = new SoftwareWhitelist
+                {
+                    ByPath = new List<PathRule>
+                    {
+                        new() { Path = @"C:\Users\*\AppData\Local\Programs\Microsoft VS Code\*", Description = "VS Code" },
+                        new() { Path = @"C:\Program Files\Dev-Cpp\*", Description = "Dev-C++" }
+                    }
+                },
+                StudentOutput = new StudentOutputSection
+                {
+                    AllowedDirectories = new List<string> { @"C:\Users\*\source\repos\**" }
+                },
+                HighRiskInterpreters = new HighRiskInterpretersSection
+                {
+                    Blocked = new List<string>
+                    {
+                        "powershell.exe", "wscript.exe", "cscript.exe",
+                        "mshta.exe", "regedit.exe", "mmc.exe"
+                    }
+                }
+            }
+        };
     }
 }

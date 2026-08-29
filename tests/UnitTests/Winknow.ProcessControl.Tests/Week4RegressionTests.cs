@@ -1,15 +1,24 @@
 using Winknow.Core.Results;
+using Winknow.Policy;
 using Winknow.ProcessControl;
 
 namespace Winknow.ProcessControl.Tests;
 
 /// <summary>
 /// 第 4 周回归测试：白名单兼容性、子进程重检、高风险解释器、规则回滚。
-/// 对应《基础版开发计划书》第 4 周验收项。
+/// 白名单从策略文件加载（单一可信源），对应《基础版开发计划书》第 4 周验收项。
 /// </summary>
 public class Week4RegressionTests
 {
-    private readonly ProcessJudge _judge = new(WhitelistRuleSet.CreateDefault());
+    private readonly ProcessJudge _judge;
+
+    public Week4RegressionTests()
+    {
+        var policy = CreateTestPolicy();
+        _judge = new ProcessJudge(
+            WhitelistRuleSet.FromPolicy(policy),
+            highRiskInterpreters: policy.SoftwareControl.HighRiskInterpreters.Blocked);
+    }
 
     // === 验收项1：Dev-C++ 完整编译调试流程正常 ===
 
@@ -187,5 +196,38 @@ public class Week4RegressionTests
         var result = judge.Judge(info);
         Assert.False(result.IsSuccess);
         Assert.Equal(ErrorCode.ProcessBlocked, result.ErrorCode);
+    }
+
+    /// <summary>构造测试用策略文件（内存，含课堂软件与高风险黑名单）。</summary>
+    private static PolicyFile CreateTestPolicy()
+    {
+        return new PolicyFile
+        {
+            Version = "7.0.0",
+            PolicyId = "test-week4",
+            SoftwareControl = new SoftwareControlSection
+            {
+                Whitelist = new SoftwareWhitelist
+                {
+                    ByPath = new List<PathRule>
+                    {
+                        new() { Path = @"C:\Users\*\AppData\Local\Programs\Microsoft VS Code\*", Description = "VS Code" },
+                        new() { Path = @"C:\Program Files\Dev-Cpp\*", Description = "Dev-C++" }
+                    }
+                },
+                StudentOutput = new StudentOutputSection
+                {
+                    AllowedDirectories = new List<string> { @"C:\Users\*\source\repos\**" }
+                },
+                HighRiskInterpreters = new HighRiskInterpretersSection
+                {
+                    Blocked = new List<string>
+                    {
+                        "powershell.exe", "wscript.exe", "cscript.exe",
+                        "mshta.exe", "regedit.exe", "mmc.exe"
+                    }
+                }
+            }
+        };
     }
 }

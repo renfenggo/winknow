@@ -25,6 +25,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Winknow.Policy\Winknow.Policy.csproj" />
     <ProjectReference Include="..\..\..\src\Winknow.ProcessControl\Winknow.ProcessControl.csproj" />
   </ItemGroup>
 

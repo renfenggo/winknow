@@ -11,14 +11,39 @@
       ],
       "ByPath": [
         {
-          "Path": "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+          "Path": "C:\\Program Files\\Microsoft Visual Studio\\*",
           "Hash": "",
-          "Description": "VS Code 主程序"
+          "Description": "Visual Studio"
         },
         {
-          "Path": "C:\\Dev-Cpp\\devcpp.exe",
+          "Path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\*",
           "Hash": "",
-          "Description": "Dev-C++ IDE"
+          "Description": "Visual Studio (x86)"
+        },
+        {
+          "Path": "C:\\Program Files\\Microsoft VS Code\\*",
+          "Hash": "",
+          "Description": "VS Code 系统级安装"
+        },
+        {
+          "Path": "C:\\Users\\*\\AppData\\Local\\Programs\\Microsoft VS Code\\*",
+          "Hash": "",
+          "Description": "VS Code 用户级安装"
+        },
+        {
+          "Path": "C:\\Program Files\\Dev-Cpp\\*",
+          "Hash": "",
+          "Description": "Dev-C++ IDE 及工具链(gcc/g++/gdb)"
+        },
+        {
+          "Path": "C:\\Program Files\\Google\\Chrome\\Application\\*",
+          "Hash": "",
+          "Description": "Chrome 浏览器"
+        },
+        {
+          "Path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\*",
+          "Hash": "",
+          "Description": "Edge 浏览器"
         }
       ],
       "ByHash": []

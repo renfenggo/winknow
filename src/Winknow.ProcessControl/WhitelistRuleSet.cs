@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Winknow.Policy;
 
 namespace Winknow.ProcessControl;
 
@@ -11,7 +12,61 @@ public sealed class WhitelistRuleSet
     public List<WhitelistRule> PathRules { get; init; } = new();
 
     /// <summary>
-    /// 创建默认白名单（编程课堂环境）。
+    /// 从策略文件构建白名单规则集（单一可信源）。
+    /// 课堂软件白名单来自策略 ByPath/ByPublisher/StudentOutput，
+    /// 系统基础设施目录内置补充（运行前提，非课堂配置）。
+    /// </summary>
+    public static WhitelistRuleSet FromPolicy(PolicyFile policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        var sw = policy.SoftwareControl;
+        var rules = new List<WhitelistRule>();
+
+        // 1. 系统基础设施目录（内置，运行前提）
+        rules.Add(new WhitelistRule { PathPattern = @"C:\Windows\System32\*", Description = "System32 目录" });
+        rules.Add(new WhitelistRule { PathPattern = @"C:\Windows\SysWOW64\*", Description = "SysWOW64 目录" });
+        rules.Add(new WhitelistRule { PathPattern = @"C:\Windows\*", Description = "Windows 根目录" });
+        rules.Add(new WhitelistRule { PathPattern = @"C:\Program Files\dotnet\*", Description = ".NET 运行时" });
+        rules.Add(new WhitelistRule { PathPattern = @"C:\Program Files\Winknow\*", Description = "Winknow 管控系统" });
+
+        // 2. 策略按路径白名单
+        foreach (var pr in sw.Whitelist.ByPath)
+        {
+            rules.Add(new WhitelistRule
+            {
+                PathPattern = pr.Path,
+                ExpectedHash = pr.Hash,
+                Description = string.IsNullOrEmpty(pr.Description) ? "策略路径白名单" : pr.Description
+            });
+        }
+
+        // 3. 学生输出目录
+        foreach (var dir in sw.StudentOutput.AllowedDirectories)
+        {
+            rules.Add(new WhitelistRule
+            {
+                PathPattern = dir,
+                Description = "学生输出目录"
+            });
+        }
+
+        // 4. 策略按发布者白名单（任意路径 + 签名校验，兜底）
+        foreach (var publisher in sw.Whitelist.ByPublisher)
+        {
+            rules.Add(new WhitelistRule
+            {
+                PathPattern = "*",
+                RequiredSigner = publisher,
+                Description = $"发布者白名单: {publisher}"
+            });
+        }
+
+        return new WhitelistRuleSet { PathRules = rules };
+    }
+
+    /// <summary>
+    /// 创建默认白名单（系统基础设施兜底，无策略文件时使用）。
+    /// 课堂软件白名单应来自策略文件，见 <see cref="FromPolicy"/>。
     /// </summary>
     public static WhitelistRuleSet CreateDefault()
     {
@@ -19,83 +74,11 @@ public sealed class WhitelistRuleSet
         {
             PathRules = new List<WhitelistRule>
             {
-                // 系统目录
-                new()
-                {
-                    PathPattern = @"C:\Windows\System32\*",
-                    Description = "System32 目录"
-                },
-                new()
-                {
-                    PathPattern = @"C:\Windows\SysWOW64\*",
-                    Description = "SysWOW64 目录"
-                },
-                new()
-                {
-                    PathPattern = @"C:\Windows\*",
-                    Description = "Windows 根目录"
-                },
-                // .NET 运行时
-                new()
-                {
-                    PathPattern = @"C:\Program Files\dotnet\*",
-                    Description = ".NET 运行时"
-                },
-                // Visual Studio
-                new()
-                {
-                    PathPattern = @"C:\Program Files\Microsoft Visual Studio\*",
-                    Description = "Visual Studio",
-                    RequiredSigner = "Microsoft"
-                },
-                new()
-                {
-                    PathPattern = @"C:\Program Files (x86)\Microsoft Visual Studio\*",
-                    Description = "Visual Studio (x86)",
-                    RequiredSigner = "Microsoft"
-                },
-                // VS Code
-                new()
-                {
-                    PathPattern = @"C:\Users\*\AppData\Local\Programs\Microsoft VS Code\*",
-                    Description = "VS Code"
-                },
-                // Dev-C++
-                new()
-                {
-                    PathPattern = @"C:\Program Files\Dev-Cpp\*",
-                    Description = "Dev-C++"
-                },
-                // 浏览器
-                new()
-                {
-                    PathPattern = @"C:\Program Files\Google\Chrome\Application\*",
-                    Description = "Chrome 浏览器",
-                    RequiredSigner = "Google"
-                },
-                new()
-                {
-                    PathPattern = @"C:\Program Files (x86)\Microsoft\Edge\Application\*",
-                    Description = "Edge 浏览器",
-                    RequiredSigner = "Microsoft"
-                },
-                // Winknow 自身
-                new()
-                {
-                    PathPattern = @"C:\Program Files\Winknow\*",
-                    Description = "Winknow 管控系统"
-                },
-                // 学生输出目录（编译产物）
-                new()
-                {
-                    PathPattern = @"C:\Users\*\source\repos\*\bin\*\*.exe",
-                    Description = "学生编译产物"
-                },
-                new()
-                {
-                    PathPattern = @"C:\Users\*\source\repos\*\obj\*\*.exe",
-                    Description = "学生编译中间产物"
-                }
+                new() { PathPattern = @"C:\Windows\System32\*", Description = "System32 目录" },
+                new() { PathPattern = @"C:\Windows\SysWOW64\*", Description = "SysWOW64 目录" },
+                new() { PathPattern = @"C:\Windows\*", Description = "Windows 根目录" },
+                new() { PathPattern = @"C:\Program Files\dotnet\*", Description = ".NET 运行时" },
+                new() { PathPattern = @"C:\Program Files\Winknow\*", Description = "Winknow 管控系统" }
             }
         };
     }

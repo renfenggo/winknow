@@ -36,12 +36,41 @@ internal sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // 1. 初始化进程管控
-        var whitelist = WhitelistRuleSet.CreateDefault();
-        _judge = new ProcessJudge(whitelist, _loggerFactory.CreateLogger<ProcessJudge>());
+        // 1. 加载策略文件（单一可信源：白名单/高风险黑名单/网络/USB 均来自此）
+        var policyPath = Path.Combine(
+            AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
+        if (File.Exists(policyPath))
+        {
+            var policyLoader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
+            var policyResult = policyLoader.Load(policyPath);
+            if (policyResult.IsSuccess)
+            {
+                _policy = policyResult.Data!;
+                _logger.LogInformation("Policy loaded: {PolicyId} v{Version}",
+                    _policy.PolicyId, _policy.Version);
+            }
+            else
+            {
+                _logger.LogError("Failed to load policy: {Error}", policyResult.ErrorMessage);
+            }
+        }
+        else
+        {
+            _logger.LogWarning("Policy file not found at {Path}, using defaults", policyPath);
+        }
+
+        // 2. 初始化进程管控（白名单与高风险黑名单从策略加载，无策略时用系统基础设施兜底）
+        var whitelist = _policy is not null
+            ? WhitelistRuleSet.FromPolicy(_policy)
+            : WhitelistRuleSet.CreateDefault();
+        var highRisk = _policy?.SoftwareControl.HighRiskInterpreters.Blocked;
+        _judge = new ProcessJudge(
+            whitelist,
+            _loggerFactory.CreateLogger<ProcessJudge>(),
+            highRisk);
         _terminator = new ProcessTerminator(_loggerFactory.CreateLogger<ProcessTerminator>());
 
-        // 2. 启动 IPC 服务端
+        // 3. 启动 IPC 服务端
         var deviceId = DeviceId.Generate();
         var authenticator = IpcAuthenticator.CreateForControlService(deviceId);
         _ipcServer = new IpcServer(
@@ -52,13 +81,13 @@ internal sealed class Worker : BackgroundService
         await _ipcServer.StartAsync();
         _logger.LogInformation("IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
 
-        // 3. 启动 WMI 进程实时监听
+        // 4. 启动 WMI 进程实时监听
         _wmiMonitor = new WmiProcessMonitor(_loggerFactory.CreateLogger<WmiProcessMonitor>());
         _wmiMonitor.ProcessStarted += OnProcessStarted;
         _wmiMonitor.Start();
         _logger.LogInformation("WMI ProcessStartTrace monitor started");
 
-        // 4. 启动全量扫描 + 周期扫描
+        // 5. 启动全量扫描 + 周期扫描
         _scanner = new ProcessScanner(
             scanInterval: TimeSpan.FromSeconds(2),
             logger: _loggerFactory.CreateLogger<ProcessScanner>());
@@ -72,51 +101,31 @@ internal sealed class Worker : BackgroundService
         _scanner.StartPeriodicScan();
         _logger.LogInformation("Periodic scan started (interval: 2s)");
 
-        // 5. 加载策略文件
-        var policyPath = Path.Combine(
-            AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
-        if (File.Exists(policyPath))
+        // 6. 应用网络管控（策略已加载时）
+        if (_policy is not null)
         {
-            var policyLoader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
-            var policyResult = policyLoader.Load(policyPath);
-            if (policyResult.IsSuccess)
+            _websiteFilter = new WebsiteFilter(_loggerFactory.CreateLogger<WebsiteFilter>());
+            _websiteFilter.LoadFromPolicy(_policy.NetworkControl.WebsiteWhitelist);
+            _logger.LogInformation("Website filter loaded: {Count} domains",
+                _policy.NetworkControl.WebsiteWhitelist.Domains.Count);
+
+            _hostsProtector = new HostsProtector(_loggerFactory.CreateLogger<HostsProtector>());
+            _hostsProtector.Initialize();
+            _hostsProtector.StartMonitoring();
+            _logger.LogInformation("Hosts file protection started");
+
+            // 7. 应用 USB 管控
+            _usbController = new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
+            if (!_policy.UsbControl.MassStorage.Enabled)
             {
-                _policy = policyResult.Data!;
-                _logger?.LogInformation("Policy loaded: {PolicyId} v{Version}",
-                    _policy.PolicyId, _policy.Version);
-
-                // 6. 应用网络管控
-                _websiteFilter = new WebsiteFilter(_loggerFactory.CreateLogger<WebsiteFilter>());
-                _websiteFilter.LoadFromPolicy(_policy.NetworkControl.WebsiteWhitelist);
-                _logger?.LogInformation("Website filter loaded: {Count} domains",
-                    _policy.NetworkControl.WebsiteWhitelist.Domains.Count);
-
-                _hostsProtector = new HostsProtector(_loggerFactory.CreateLogger<HostsProtector>());
-                _hostsProtector.Initialize();
-                _hostsProtector.StartMonitoring();
-                _logger?.LogInformation("Hosts file protection started");
-
-                // 7. 应用 USB 管控
-                _usbController = new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
-                if (!_policy.UsbControl.MassStorage.Enabled)
-                {
-                    _usbController.Disable();
-                    _logger?.LogWarning("USB Mass Storage disabled by policy");
-                }
-                else
-                {
-                    _usbController.Enable();
-                    _logger?.LogInformation("USB Mass Storage enabled by policy");
-                }
+                _usbController.Disable();
+                _logger.LogWarning("USB Mass Storage disabled by policy");
             }
             else
             {
-                _logger?.LogError("Failed to load policy: {Error}", policyResult.ErrorMessage);
+                _usbController.Enable();
+                _logger.LogInformation("USB Mass Storage enabled by policy");
             }
-        }
-        else
-        {
-            _logger?.LogWarning("Policy file not found at {Path}, using defaults", policyPath);
         }
 
         try
