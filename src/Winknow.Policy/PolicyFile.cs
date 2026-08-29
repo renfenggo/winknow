@@ -120,6 +120,18 @@ public sealed class NetworkControlSection
 
     /// <summary>代理配置。</summary>
     public ProxySection Proxy { get; init; } = new();
+
+    /// <summary>DNS 管控配置。</summary>
+    public DnsSection Dns { get; init; } = new();
+
+    /// <summary>浏览器企业策略配置。</summary>
+    public BrowserPolicySection BrowserPolicy { get; init; } = new();
+
+    /// <summary>VPN/TUN 检测配置。</summary>
+    public VpnDetectionSection VpnDetection { get; init; } = new();
+
+    /// <summary>网站健康检测配置。</summary>
+    public WebsiteHealthSection WebsiteHealth { get; init; } = new();
 }
 
 /// <summary>
@@ -141,6 +153,111 @@ public sealed class ProxySection
 
     /// <summary>是否强制使用系统代理。</summary>
     public bool ForceSystemProxy { get; init; } = true;
+
+    /// <summary>PAC 配置。</summary>
+    public PacSection Pac { get; init; } = new();
+
+    /// <summary>失败模式：strict（失败阻断，不静默放行）或 lenient（宽松，失败放行）。</summary>
+    public string FailMode { get; init; } = "strict";
+}
+
+/// <summary>
+/// PAC（代理自动配置）策略。
+/// </summary>
+public sealed class PacSection
+{
+    /// <summary>是否允许使用 PAC。</summary>
+    public bool Allowed { get; init; } = false;
+
+    /// <summary>允许的 PAC AutoConfigURL（空表示禁止任何 PAC）。</summary>
+    public string AutoConfigUrl { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// DNS 管控配置。
+/// </summary>
+public sealed class DnsSection
+{
+    /// <summary>允许的 DNS 服务器列表（IPv4/IPv6）。空表示不校验。</summary>
+    public List<string> AllowedServers { get; init; } = new();
+
+    /// <summary>禁止的公共 DNS 服务器列表（如 8.8.8.8、1.1.1.1）。</summary>
+    public List<string> BlockedServers { get; init; } = new();
+
+    /// <summary>是否检测 DoH（DNS over HTTPS）。</summary>
+    public bool BlockDoh { get; init; } = true;
+}
+
+/// <summary>
+/// 浏览器企业策略配置。
+/// </summary>
+public sealed class BrowserPolicySection
+{
+    /// <summary>Chrome 企业策略。</summary>
+    public BrowserPolicyTarget Chrome { get; init; } = new();
+
+    /// <summary>Edge 企业策略。</summary>
+    public BrowserPolicyTarget Edge { get; init; } = new();
+}
+
+/// <summary>
+/// 单个浏览器的企业策略目标。
+/// </summary>
+public sealed class BrowserPolicyTarget
+{
+    /// <summary>是否禁用浏览器自定义代理设置。</summary>
+    public bool DisableCustomProxy { get; init; } = true;
+
+    /// <summary>是否禁用 DoH（DNS over HTTPS）。</summary>
+    public bool DisableDoh { get; init; } = true;
+
+    /// <summary>是否禁用安全 DNS。</summary>
+    public bool DisableSecureDns { get; init; } = true;
+}
+
+/// <summary>
+/// VPN/TUN 检测配置。
+/// </summary>
+public sealed class VpnDetectionSection
+{
+    /// <summary>已知 VPN 客户端进程名黑名单。</summary>
+    public List<string> BlockedProcesses { get; init; } = new();
+
+    /// <summary>已知 VPN 服务名黑名单。</summary>
+    public List<string> BlockedServices { get; init; } = new();
+
+    /// <summary>是否检测虚拟网卡（TUN/TAP）。</summary>
+    public bool DetectVirtualAdapters { get; init; } = true;
+}
+
+/// <summary>
+/// 网站健康检测配置。
+/// </summary>
+public sealed class WebsiteHealthSection
+{
+    /// <summary>需检测的端点列表（URL + 名称）。</summary>
+    public List<HealthEndpoint> Endpoints { get; init; } = new();
+
+    /// <summary>检测超时（秒）。</summary>
+    public int TimeoutSeconds { get; init; } = 5;
+
+    /// <summary>检测间隔（秒）。</summary>
+    public int IntervalSeconds { get; init; } = 60;
+}
+
+/// <summary>
+/// 健康检测端点。
+/// </summary>
+public sealed class HealthEndpoint
+{
+    /// <summary>端点名称。</summary>
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>完整 URL。</summary>
+    public string Url { get; init; } = string.Empty;
+
+    /// <summary>期望的 HTTP 状态码（0 表示不校验，仅校验可达）。</summary>
+    public int ExpectedStatus { get; init; } = 200;
 }
 
 /// <summary>

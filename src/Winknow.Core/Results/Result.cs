@@ -117,6 +117,8 @@ public enum ErrorCode
     InvalidArgument = 1004,
     /// <summary>The caller lacks the required privileges (e.g. not an administrator).</summary>
     AccessDenied = 1005,
+    /// <summary>A system configuration value is invalid or has been tampered with.</summary>
+    InvalidConfiguration = 1006,
     /// <summary>An external Win32 or system call failed.</summary>
     ExternalError = 9001,
     /// <summary>Encryption failed.</summary>

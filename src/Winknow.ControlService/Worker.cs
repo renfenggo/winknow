@@ -30,6 +30,11 @@ internal sealed class Worker : BackgroundService
     private HostsProtector? _hostsProtector;
     private WebsiteFilter? _websiteFilter;
     private UsbStorageController? _usbController;
+    private ProxyGuard? _proxyGuard;
+    private DnsMonitor? _dnsMonitor;
+    private BrowserPolicyEnforcer? _browserPolicyEnforcer;
+    private VpnTunDetector? _vpnDetector;
+    private WebsiteHealthChecker? _websiteHealthChecker;
     private PolicyFile? _policy;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
@@ -151,7 +156,47 @@ internal sealed class Worker : BackgroundService
             _hostsProtector.StartMonitoring();
             _logger?.LogInformation("Hosts file protection started");
 
-            // 7. 应用 USB 管控
+            // 8. 第 8 周网络防绕过：代理守卫 + PAC 保护 + DNS 监控 + 浏览器策略 + VPN 检测 + 网站健康
+            _proxyGuard = new ProxyGuard(
+                _policy.NetworkControl.Proxy,
+                _loggerFactory.CreateLogger<ProxyGuard>());
+            _proxyGuard.StartMonitoring();
+            _logger?.LogInformation("Proxy guard started (20s periodic check)");
+
+            _dnsMonitor = new DnsMonitor(
+                _policy.NetworkControl.Dns,
+                _loggerFactory.CreateLogger<DnsMonitor>());
+            _dnsMonitor.Check();
+            _logger?.LogInformation("DNS monitor initialized");
+
+            _browserPolicyEnforcer = new BrowserPolicyEnforcer(
+                _loggerFactory.CreateLogger<BrowserPolicyEnforcer>());
+            var browserResult = _browserPolicyEnforcer.ApplyAll(_policy.NetworkControl.BrowserPolicy);
+            _logger?.LogInformation("Browser enterprise policy: {Status}",
+                browserResult.IsSuccess ? "applied" : browserResult.ErrorMessage);
+
+            _vpnDetector = new VpnTunDetector(
+                _policy.NetworkControl.VpnDetection,
+                _loggerFactory.CreateLogger<VpnTunDetector>());
+            var vpnResult = _vpnDetector.Detect();
+            if (vpnResult.Detected)
+            {
+                _logger?.LogWarning("VPN detected on startup: {Count} items", vpnResult.Items.Count);
+            }
+
+            if (_policy.NetworkControl.WebsiteHealth.Endpoints.Count > 0)
+            {
+                _websiteHealthChecker = new WebsiteHealthChecker(
+                    _policy.NetworkControl.WebsiteHealth,
+                    _loggerFactory.CreateLogger<WebsiteHealthChecker>());
+                _websiteHealthChecker.UnhealthyDetected += items =>
+                    _logger?.LogWarning("Website unhealthy: {Endpoints}",
+                        string.Join(", ", items.Select(i => i.Name)));
+                _websiteHealthChecker.StartMonitoring();
+                _logger?.LogInformation("Website health checker started");
+            }
+
+            // 9. 应用 USB 管控
             _usbController = new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
             if (!_policy.UsbControl.MassStorage.Enabled)
             {
@@ -178,6 +223,8 @@ internal sealed class Worker : BackgroundService
             _wmiMonitor?.Dispose();
             _scanner?.Dispose();
             _hostsProtector?.Dispose();
+            _proxyGuard?.Dispose();
+            _websiteHealthChecker?.Dispose();
             authenticator.Dispose();
 
             if (_ipcServer is not null)

@@ -78,7 +78,65 @@
     },
     "Proxy": {
       "Allowed": false,
-      "ForceSystemProxy": true
+      "ForceSystemProxy": true,
+      "Pac": {
+        "Allowed": false,
+        "AutoConfigUrl": ""
+      },
+      "FailMode": "strict"
+    },
+    "Dns": {
+      "AllowedServers": [],
+      "BlockedServers": [
+        "8.8.8.8",
+        "8.8.4.4",
+        "1.1.1.1",
+        "1.0.0.1"
+      ],
+      "BlockDoh": true
+    },
+    "BrowserPolicy": {
+      "Chrome": {
+        "DisableCustomProxy": true,
+        "DisableDoh": true,
+        "DisableSecureDns": true
+      },
+      "Edge": {
+        "DisableCustomProxy": true,
+        "DisableDoh": true,
+        "DisableSecureDns": true
+      }
+    },
+    "VpnDetection": {
+      "BlockedProcesses": [],
+      "BlockedServices": [],
+      "DetectVirtualAdapters": true
+    },
+    "WebsiteHealth": {
+      "Endpoints": [
+        {
+          "Name": "洛谷首页",
+          "Url": "https://www.luogu.com.cn",
+          "ExpectedStatus": 200
+        },
+        {
+          "Name": "洛谷图片CDN",
+          "Url": "https://cdn.luogu.com.cn",
+          "ExpectedStatus": 0
+        },
+        {
+          "Name": "洛谷登录",
+          "Url": "https://www.luogu.com.cn/login",
+          "ExpectedStatus": 0
+        },
+        {
+          "Name": "洛谷提交",
+          "Url": "https://www.luogu.com.cn/record",
+          "ExpectedStatus": 0
+        }
+      ],
+      "TimeoutSeconds": 5,
+      "IntervalSeconds": 60
     }
   },
   "UsbControl": {
