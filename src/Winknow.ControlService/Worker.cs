@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Winknow.Core;
 using Winknow.DeviceSecurity;
 using Winknow.Ipc;
+using Winknow.Logging;
 using Winknow.Network;
 using Winknow.Policy;
 using Winknow.ProcessControl;
@@ -36,6 +37,12 @@ internal sealed class Worker : BackgroundService
     private VpnTunDetector? _vpnDetector;
     private WebsiteHealthChecker? _websiteHealthChecker;
     private PolicyFile? _policy;
+    private DeviceLogKeyGenerator? _keyGenerator;
+    private LogCipher? _logCipher;
+    private HashChain? _hashChain;
+    private LogCheckpointSigner? _checkpointSigner;
+    private EventLogAnchor? _eventLogAnchor;
+    private DataRetentionManager? _retentionManager;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
     {
@@ -101,6 +108,57 @@ internal sealed class Worker : BackgroundService
             }
         }
 
+        // 10. 密钥与日志完整性基础设施（第 9 周）
+        var deviceId = DeviceId.Generate();
+        var programDataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
+        var keyDir = Path.Combine(programDataDir, "keys");
+        Directory.CreateDirectory(keyDir);
+
+        _keyGenerator = new DeviceLogKeyGenerator(
+            keyDir, deviceId, _loggerFactory.CreateLogger<DeviceLogKeyGenerator>());
+        var logKeyResult = _keyGenerator.GetOrCreateLogEncryptionKey();
+        var hmacKeyResult = _keyGenerator.GetOrCreateLogCheckpointKey();
+
+        if (logKeyResult.IsSuccess && hmacKeyResult.IsSuccess)
+        {
+            _logCipher = new LogCipher(logKeyResult.Data!, _loggerFactory.CreateLogger<LogCipher>());
+            _hashChain = new HashChain(logger: _loggerFactory.CreateLogger<HashChain>());
+            _checkpointSigner = new LogCheckpointSigner(
+                hmacKeyResult.Data!, _loggerFactory.CreateLogger<LogCheckpointSigner>());
+            _logger?.LogInformation("Log infrastructure initialized (AES-256-GCM + HashChain + HMAC checkpoint)");
+
+            // 生成密钥清单（声明客户端不含签名私钥）
+            var manifest = _keyGenerator.GenerateManifest(deviceId);
+            _logger?.LogInformation("Key manifest: {Count} keys declared (CodeSigning private key: {HasSigningKey})",
+                manifest.Keys.Count,
+                manifest.Keys.Any(k => k.Purpose == KeyPurpose.CodeSigning && k.ContainsPrivateKey));
+        }
+        else
+        {
+            _logger?.LogError("Failed to initialize log keys: logKey={LogErr}, hmacKey={HmacErr}",
+                logKeyResult.ErrorMessage, hmacKeyResult.ErrorMessage);
+        }
+
+        // Event Log 锚点：关键事件双写到 Windows 事件日志
+        _eventLogAnchor = new EventLogAnchor("Winknow", logger: _loggerFactory.CreateLogger<EventLogAnchor>());
+        var anchorInit = _eventLogAnchor.Initialize();
+        _logger?.LogInformation("Event log anchor: {Status}", anchorInit.IsSuccess ? "initialized" : anchorInit.ErrorMessage);
+        _eventLogAnchor.WriteSecurityAnchor("ServiceStarted", deviceId);
+
+        // 数据保留管理器：启动时清理过期记录
+        var dbPath = Path.Combine(programDataDir, Constants.Logging.DatabaseFileName);
+        _retentionManager = new DataRetentionManager(
+            dbPath, logger: _loggerFactory.CreateLogger<DataRetentionManager>());
+        var purgeResult = _retentionManager.PurgeExpired();
+        if (purgeResult.IsSuccess && purgeResult.Data > 0)
+        {
+            _logger?.LogInformation("Purged {Count} expired audit records on startup (retention: {Days} days)",
+                purgeResult.Data, _retentionManager.RetentionDays);
+        }
+
+        _logger?.LogInformation("Privacy policy: {Summary}", PrivacyPolicy.GetSummary());
+
         // 2. 初始化进程管控（白名单与高风险黑名单从策略加载，无策略时用系统基础设施兜底）
         var whitelist = _policy is not null
             ? WhitelistRuleSet.FromPolicy(_policy)
@@ -113,7 +171,6 @@ internal sealed class Worker : BackgroundService
         _terminator = new ProcessTerminator(_loggerFactory.CreateLogger<ProcessTerminator>());
 
         // 3. 启动 IPC 服务端
-        var deviceId = DeviceId.Generate();
         var authenticator = IpcAuthenticator.CreateForControlService(deviceId);
         _ipcServer = new IpcServer(
             IpcConstants.ControlPipeName,
@@ -225,6 +282,9 @@ internal sealed class Worker : BackgroundService
             _hostsProtector?.Dispose();
             _proxyGuard?.Dispose();
             _websiteHealthChecker?.Dispose();
+            _logCipher?.Dispose();
+            _checkpointSigner?.Dispose();
+            _eventLogAnchor?.Dispose();
             authenticator.Dispose();
 
             if (_ipcServer is not null)
@@ -251,6 +311,8 @@ internal sealed class Worker : BackgroundService
             _logger?.LogWarning("Blocking process: {Pid} {Name} {Path} - {Reason}",
                 info.ProcessId, info.ProcessName, info.FilePath, result.ErrorMessage);
             _terminator.Terminate(info.ProcessId, result.ErrorMessage ?? "Blocked by policy");
+            _eventLogAnchor?.WriteSecurityAnchor("ProcessBlocked",
+                $"{info.ProcessName} (PID={info.ProcessId}): {result.ErrorMessage}");
         }
     }
 
