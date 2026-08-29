@@ -31,7 +31,7 @@ internal static class TestUpdatablePackage
     public static UpdateManifest BuildSignedManifest(
         RSA privateKey,
         string version = "7.0.1",
-        string minCompatibleVersion = "7.0.0",
+        string minCompatibleVersion = "0.0.0",
         string productId = ProductId,
         List<string>? rollbackBlacklist = null,
         Dictionary<string, string>? components = null,

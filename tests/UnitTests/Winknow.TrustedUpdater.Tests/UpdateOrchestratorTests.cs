@@ -31,7 +31,7 @@ public class UpdateOrchestratorTests : IDisposable
         var manifest = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh } });
         var package = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"v7.0.1.wku"), manifest,
+            Path.Combine(_root, $"v7.0.1.wku"), manifest,
             new[] { ("bin.txt", fc) });
 
         var orchestrator = new UpdateOrchestrator(NewOptions(pub, stop: () => _events.Add("stop"), start: () => _events.Add("start"),
@@ -53,7 +53,7 @@ public class UpdateOrchestratorTests : IDisposable
         var manifest = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh } });
         var package = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"bad.wku"), manifest,
+            Path.Combine(_root, $"bad.wku"), manifest,
             new[] { ("bin.txt", fc) });
 
         var orchestrator = new UpdateOrchestrator(NewOptions(otherPub,
@@ -77,7 +77,7 @@ public class UpdateOrchestratorTests : IDisposable
             productId: "Other.Product",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh } });
         var package = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"other.wku"), manifest,
+            Path.Combine(_root, $"other.wku"), manifest,
             new[] { ("bin.txt", fc) });
 
         var orchestrator = new UpdateOrchestrator(NewOptions(pub));
@@ -94,7 +94,7 @@ public class UpdateOrchestratorTests : IDisposable
         var manifest = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = "00" } });
         var package = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"hash.wku"), manifest,
+            Path.Combine(_root, $"hash.wku"), manifest,
             new[] { ("bin.txt", "real-content-not-matching-hash") });
 
         var orchestrator = new UpdateOrchestrator(NewOptions(pub));
@@ -114,7 +114,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m1 = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh1 } });
         var p1 = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"v1.wku"), m1, new[] { ("bin.txt", fc1) });
+            Path.Combine(_root, $"v1.wku"), m1, new[] { ("bin.txt", fc1) });
         var orchestrator = new UpdateOrchestrator(NewOptions(pub,
             checkService: () => Result.Success()));
         Assert.True(orchestrator.Apply(p1).IsSuccess);
@@ -124,7 +124,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m0 = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.0",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh0 } });
         var p0 = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"v0.wku"), m0, new[] { ("bin.txt", fc0) });
+            Path.Combine(_root, $"v0.wku"), m0, new[] { ("bin.txt", fc0) });
         var r = orchestrator.Apply(p0);
         Assert.False(r.IsSuccess);
         Assert.Equal(ErrorCode.VersionBlocked, r.ErrorCode);
@@ -142,7 +142,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m1 = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh1 } });
         var p1 = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"v1.wku"), m1, new[] { ("bin.txt", fc1) });
+            Path.Combine(_root, $"v1.wku"), m1, new[] { ("bin.txt", fc1) });
         var orchestrator1 = new UpdateOrchestrator(NewOptions(pub,
             checkService: () => Result.Success()));
         Assert.True(orchestrator1.Apply(p1).IsSuccess);
@@ -152,7 +152,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m2 = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.2",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh2 } });
         var p2 = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"v2.wku"), m2, new[] { ("bin.txt", fc2) });
+            Path.Combine(_root, $"v2.wku"), m2, new[] { ("bin.txt", fc2) });
         var orchestrator2 = new UpdateOrchestrator(NewOptions(pub,
             checkService: () => Result.Failure(ErrorCode.ExternalError, "v7.0.2 启动失败")));
 
@@ -172,7 +172,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh } });
         var package = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"ok.wku"), m, new[] { ("bin.txt", fc) });
+            Path.Combine(_root, $"ok.wku"), m, new[] { ("bin.txt", fc) });
         var orchestrator = new UpdateOrchestrator(NewOptions(pub,
             checkService: () => Result.Success(),
             checkAgent: () => Result.Success(),
@@ -200,7 +200,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh } });
         var package = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"ok.wku"), m, new[] { ("bin.txt", fc) });
+            Path.Combine(_root, $"ok.wku"), m, new[] { ("bin.txt", fc) });
 
         var orchestrator = new UpdateOrchestrator(NewOptions(pub,
             checkService: () => Result.Success()));
@@ -219,7 +219,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m1 = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.1",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh1 } });
         var p1 = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"v1.wku"), m1, new[] { ("bin.txt", fc1) });
+            Path.Combine(_root, $"v1.wku"), m1, new[] { ("bin.txt", fc1) });
         var orch = new UpdateOrchestrator(NewOptions(pub, checkService: () => Result.Success()));
         Assert.True(orch.Apply(p1).IsSuccess);
 
@@ -228,7 +228,7 @@ public class UpdateOrchestratorTests : IDisposable
         var m2 = TestUpdatablePackage.BuildSignedManifest(priv, version: "7.0.2",
             files: new List<FileEntry> { new() { RelativePath = "bin.txt", Sha256 = fh2 } });
         var p2 = TestUpdatablePackage.WritePackage(
-            Path.Combine(_root, "..", $"v2.wku"), m2, new[] { ("bin.txt", fc2) });
+            Path.Combine(_root, $"v2.wku"), m2, new[] { ("bin.txt", fc2) });
         Assert.True(orch.Apply(p2).IsSuccess);
 
         // 手动回滚
@@ -263,4 +263,6 @@ public class UpdateOrchestratorTests : IDisposable
             StartServices = start,
             CheckServiceHealth = checkService,
             CheckAgentHealth = checkAgent,
-            CheckPolicyHealth
+            CheckPolicyHealth = checkPolicy
+        };
+}

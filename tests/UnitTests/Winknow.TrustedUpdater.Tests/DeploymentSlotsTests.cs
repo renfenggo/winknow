@@ -116,6 +116,7 @@ public class DeploymentSlotsTests : IDisposable
 
     private static void SeedStaging(string stagingDir, params string[] fileNames)
     {
+        Directory.CreateDirectory(stagingDir);
         foreach (var name in fileNames)
         {
             File.WriteAllText(Path.Combine(stagingDir, name), "content-" + name);

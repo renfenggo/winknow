@@ -40,6 +40,9 @@ public sealed class DeploymentSlots
         PreviousDir = Path.Combine(deployRoot, "Previous");
         StagingDir = Path.Combine(deployRoot, "Staging");
         Directory.CreateDirectory(deployRoot);
+        Directory.CreateDirectory(CurrentDir);
+        Directory.CreateDirectory(PreviousDir);
+        Directory.CreateDirectory(StagingDir);
     }
 
     /// <summary>
