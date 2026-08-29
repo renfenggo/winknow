@@ -1,23 +1,19 @@
-using System.ServiceProcess;
 using Microsoft.Extensions.Logging;
+using System.ServiceProcess;
 
 namespace Winknow.GuardService;
 
 /// <summary>
-/// GuardService 守护服务工作器。
+/// GuardService 守护进程工作器。
 /// 运行身份：LocalSystem | 服务名：Winknow Guard Service
-///
-/// 职责：监控 Winknow Control Service 运行状态，停止时尝试拉起。
-/// 注意：完整的对端验证、指数退避、重启阈值、Safe Degraded Mode 在第 10 周实现。
+/// 职责：监控 ControlService 运行状态，服务被停止时自动重启。
+/// 不承担交互式键盘钩子。
 /// </summary>
 internal sealed class Worker : BackgroundService
 {
-    private const string ControlServiceName = "Winknow Control Service";
-    private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(1);
-
     private readonly ILogger<Worker> _logger;
-    private TimeSpan _currentBackoff = ScanInterval;
+    private const string ControlServiceName = "Winknow Control Service";
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(3);
 
     internal Worker(ILogger<Worker> logger)
     {
@@ -26,35 +22,68 @@ internal sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Guard service started, monitoring {Service}", ControlServiceName);
+        _logger.LogInformation("GuardService started - monitoring {Service}", ControlServiceName);
+
+        var restartAttempts = 0;
+        var maxRestartAttempts = 5;
+        var resetTimer = TimeSpan.FromMinutes(2);
+
+        using var resetTimer_cts = new CancellationTokenSource();
+        var lastRestartTime = DateTime.MinValue;
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                if (IsControlServiceStopped())
+                var isRunning = false;
+                try
                 {
-                    _logger.LogWarning("{Service} is not running, attempting to start", ControlServiceName);
-                    TryStartControlService();
+                    using var sc = new ServiceController(ControlServiceName);
+                    isRunning = sc.Status == ServiceControllerStatus.Running;
                 }
-                else
+                catch
                 {
-                    // 服务正常运行，重置退避
-                    if (_currentBackoff != ScanInterval)
+                    // 服务未安装或无法访问
+                    isRunning = false;
+                }
+
+                if (!isRunning)
+                {
+                    // 重启限流：2 分钟内最多重启 5 次
+                    if (restartAttempts >= maxRestartAttempts &&
+                        DateTime.UtcNow - lastRestartTime < resetTimer)
                     {
-                        _logger.LogInformation("{Service} is running, backoff reset", ControlServiceName);
-                        _currentBackoff = ScanInterval;
+                        _logger.LogCritical(
+                            "ControlService restart limit reached ({Attempts}/{Max}), waiting {Minutes} min before retry",
+                            restartAttempts, maxRestartAttempts, resetTimer.TotalMinutes);
+                        await Task.Delay(resetTimer, stoppingToken);
+                        restartAttempts = 0;
+                        continue;
+                    }
+
+                    _logger.LogWarning("ControlService not running, attempting restart {Attempt}/{Max}",
+                        restartAttempts + 1, maxRestartAttempts);
+
+                    if (TryRestartService())
+                    {
+                        _logger.LogWarning("ControlService restarted successfully");
+                        lastRestartTime = DateTime.UtcNow;
+                        restartAttempts++;
+                    }
+                    else
+                    {
+                        _logger.LogError("Failed to restart ControlService");
                     }
                 }
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception ex)
             {
-                _logger.LogError(exception, "Failed to check {Service} status", ControlServiceName);
+                _logger.LogError(ex, "GuardService monitoring error");
             }
 
             try
             {
-                await Task.Delay(_currentBackoff, stoppingToken);
+                await Task.Delay(CheckInterval, stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -62,33 +91,38 @@ internal sealed class Worker : BackgroundService
             }
         }
 
-        _logger.LogInformation("Guard service stopping");
+        _logger.LogInformation("GuardService stopped");
     }
 
-    private static bool IsControlServiceStopped()
-    {
-        using ServiceController controller = new(ControlServiceName);
-        return controller.Status is ServiceControllerStatus.Stopped or ServiceControllerStatus.StopPending;
-    }
-
-    private void TryStartControlService()
+    /// <summary>
+    /// 尝试启动 ControlService。
+    /// </summary>
+    private bool TryRestartService()
     {
         try
         {
-            using ServiceController controller = new(ControlServiceName);
-            controller.Start();
-            _logger.LogInformation("{Service} start requested", ControlServiceName);
-            // 启动后重置退避，等待下次检查确认
-            _currentBackoff = ScanInterval;
+            using var sc = new ServiceController(ControlServiceName);
+            var timeout = TimeSpan.FromSeconds(30);
+
+            if (sc.Status == ServiceControllerStatus.Stopped)
+            {
+                sc.Start();
+                sc.WaitForStatus(ServiceControllerStatus.Running, timeout);
+                return sc.Status == ServiceControllerStatus.Running;
+            }
+            else if (sc.Status == ServiceControllerStatus.Paused)
+            {
+                sc.Continue();
+                sc.WaitForStatus(ServiceControllerStatus.Running, timeout);
+                return sc.Status == ServiceControllerStatus.Running;
+            }
+
+            return sc.Status == ServiceControllerStatus.Running;
         }
-        catch (Exception exception)
+        catch (Exception ex)
         {
-            _logger.LogError(exception, "Failed to start {Service}", ControlServiceName);
-            // 启动失败，退避加倍避免重启风暴（完整指数退避在第 10 周实现）
-            _currentBackoff = _currentBackoff >= MaxBackoff
-                ? MaxBackoff
-                : TimeSpan.FromTicks(_currentBackoff.Ticks * 2);
-            _logger.LogWarning("Backoff increased to {Backoff}s", _currentBackoff.TotalSeconds);
+            _logger?.LogError(ex, "Restart attempt failed for {Service}", ControlServiceName);
+            return false;
         }
     }
 }

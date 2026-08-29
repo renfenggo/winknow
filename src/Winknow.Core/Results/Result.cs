@@ -127,6 +127,10 @@ public enum ErrorCode
     SignatureInvalid = 2003,
     /// <summary>A required key was not found.</summary>
     KeyNotFound = 2004,
+    /// <summary>A file hash did not match the expected value.</summary>
+    HashMismatch = 2005,
+    /// <summary>A version is blocked by downgrade protection.</summary>
+    VersionBlocked = 2006,
     /// <summary>An IPC connection could not be established.</summary>
     IpcConnectionFailed = 3001,
     /// <summary>An IPC request timed out.</summary>

@@ -54,17 +54,46 @@ internal sealed class Worker : BackgroundService
             if (policyResult.IsSuccess)
             {
                 _policy = policyResult.Data!;
-                _logger.LogInformation("Policy loaded: {PolicyId} v{Version}",
+                _logger?.LogInformation("Policy loaded: {PolicyId} v{Version}",
                     _policy.PolicyId, _policy.Version);
             }
             else
             {
-                _logger.LogError("Failed to load policy: {Error}", policyResult.ErrorMessage);
+                _logger?.LogError("Failed to load policy: {Error}", policyResult.ErrorMessage);
             }
         }
         else
         {
-            _logger.LogWarning("Policy file not found at {Path}, using defaults", policyPath);
+            _logger?.LogWarning("Policy file not found at {Path}, using defaults", policyPath);
+        }
+
+        // 8. 自保护加固
+        var serviceDacl = new ServiceDaclProtector(_loggerFactory.CreateLogger<ServiceDaclProtector>());
+        serviceDacl.Harden("Winknow Control Service");
+        serviceDacl.Harden("Winknow Guard Service");
+        serviceDacl.DisableStopForUsers("Winknow Control Service");
+        _logger?.LogInformation("Service DACL hardened");
+
+        // 9. 注册表保护 + 策略执行
+        var registryProtector = new RegistryAclProtector(_loggerFactory.CreateLogger<RegistryAclProtector>());
+        registryProtector.ProtectWinknowServiceKeys();
+        _logger?.LogInformation("Registry keys protected");
+
+        var policyEnforcer = new PolicyEnforcer(_loggerFactory.CreateLogger<PolicyEnforcer>());
+        policyEnforcer.DisableTaskManager();
+        policyEnforcer.DisableRegistryEditor();
+        policyEnforcer.DisableCommandPrompt();
+        _logger?.LogInformation("System policy enforced (TaskMgr/RegEdit/CMD disabled)");
+
+        // 检查 Run 键篡改
+        var suspiciousItems = policyEnforcer.CheckRunKeyForModifications();
+        if (suspiciousItems.Count > 0)
+        {
+            _logger?.LogWarning("Suspicious Run key entries detected: {Count}", suspiciousItems.Count);
+            foreach (var item in suspiciousItems)
+            {
+                _logger?.LogWarning("  Suspicious: {Entry}", item);
+            }
         }
 
         // 2. 初始化进程管控（白名单与高风险黑名单从策略加载，无策略时用系统基础设施兜底）
@@ -87,13 +116,13 @@ internal sealed class Worker : BackgroundService
             _loggerFactory.CreateLogger<IpcServer>());
         _ipcServer.MessageReceived += OnMessageReceived;
         await _ipcServer.StartAsync();
-        _logger.LogInformation("IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
+        _logger?.LogInformation("IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
 
         // 4. 启动 WMI 进程实时监听
         _wmiMonitor = new WmiProcessMonitor(_loggerFactory.CreateLogger<WmiProcessMonitor>());
         _wmiMonitor.ProcessStarted += OnProcessStarted;
         _wmiMonitor.Start();
-        _logger.LogInformation("WMI ProcessStartTrace monitor started");
+        _logger?.LogInformation("WMI ProcessStartTrace monitor started");
 
         // 5. 启动全量扫描 + 周期扫描
         _scanner = new ProcessScanner(
@@ -102,37 +131,37 @@ internal sealed class Worker : BackgroundService
         _scanner.ScanCompleted += OnScanCompleted;
 
         // 启动时执行一次全量扫描
-        _logger.LogInformation("Performing initial full process scan...");
+        _logger?.LogInformation("Performing initial full process scan...");
         _scanner.ScanAll();
 
         // 启动周期扫描
         _scanner.StartPeriodicScan();
-        _logger.LogInformation("Periodic scan started (interval: 2s)");
+        _logger?.LogInformation("Periodic scan started (interval: 2s)");
 
         // 6. 应用网络管控（策略已加载时）
         if (_policy is not null)
         {
             _websiteFilter = new WebsiteFilter(_loggerFactory.CreateLogger<WebsiteFilter>());
             _websiteFilter.LoadFromPolicy(_policy.NetworkControl.WebsiteWhitelist);
-            _logger.LogInformation("Website filter loaded: {Count} domains",
+            _logger?.LogInformation("Website filter loaded: {Count} domains",
                 _policy.NetworkControl.WebsiteWhitelist.Domains.Count);
 
             _hostsProtector = new HostsProtector(_loggerFactory.CreateLogger<HostsProtector>());
             _hostsProtector.Initialize();
             _hostsProtector.StartMonitoring();
-            _logger.LogInformation("Hosts file protection started");
+            _logger?.LogInformation("Hosts file protection started");
 
             // 7. 应用 USB 管控
             _usbController = new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
             if (!_policy.UsbControl.MassStorage.Enabled)
             {
                 _usbController.Disable();
-                _logger.LogWarning("USB Mass Storage disabled by policy");
+                _logger?.LogWarning("USB Mass Storage disabled by policy");
             }
             else
             {
                 _usbController.Enable();
-                _logger.LogInformation("USB Mass Storage enabled by policy");
+                _logger?.LogInformation("USB Mass Storage enabled by policy");
             }
         }
 
@@ -172,7 +201,7 @@ internal sealed class Worker : BackgroundService
         var result = _judge.Judge(info);
         if (!result.IsSuccess)
         {
-            _logger.LogWarning("Blocking process: {Pid} {Name} {Path} - {Reason}",
+            _logger?.LogWarning("Blocking process: {Pid} {Name} {Path} - {Reason}",
                 info.ProcessId, info.ProcessName, info.FilePath, result.ErrorMessage);
             _terminator.Terminate(info.ProcessId, result.ErrorMessage ?? "Blocked by policy");
         }
@@ -194,7 +223,7 @@ internal sealed class Worker : BackgroundService
             var result = _judge.Judge(info);
             if (!result.IsSuccess)
             {
-                _logger.LogWarning("Blocking process (scan): {Pid} {Name} - {Reason}",
+                _logger?.LogWarning("Blocking process (scan): {Pid} {Name} - {Reason}",
                     info.ProcessId, info.ProcessName, result.ErrorMessage);
                 if (_terminator.Terminate(info.ProcessId, result.ErrorMessage ?? "Blocked by scan"))
                 {
@@ -205,7 +234,7 @@ internal sealed class Worker : BackgroundService
 
         if (blockedCount > 0)
         {
-            _logger.LogWarning("Scan completed: {Total} processes, {Blocked} blocked",
+            _logger?.LogWarning("Scan completed: {Total} processes, {Blocked} blocked",
                 processes.Count, blockedCount);
         }
     }
@@ -222,22 +251,22 @@ internal sealed class Worker : BackgroundService
     {
         // 进程 DACL：LocalSystem 可直接应用
         var proc = ProcessSecurity.ProtectCurrentProcess(_logger);
-        _logger.LogInformation("Process DACL: {Status}", proc.IsSuccess ? "applied" : proc.ErrorMessage);
+        _logger?.LogInformation("Process DACL: {Status}", proc.IsSuccess ? "applied" : proc.ErrorMessage);
 
         // 服务级保护：需 SCM 句柄，LocalSystem 具备权限
         var dacl = ServiceSecurity.ApplyServiceProtection(ServiceName, _logger);
-        _logger.LogInformation("Service DACL: {Status}", dacl.IsSuccess ? "applied" : dacl.ErrorMessage);
+        _logger?.LogInformation("Service DACL: {Status}", dacl.IsSuccess ? "applied" : dacl.ErrorMessage);
 
         var recovery = ServiceRecovery.ApplyServiceRecovery(ServiceName, _logger);
-        _logger.LogInformation("Service recovery: {Status}", recovery.IsSuccess ? "configured" : recovery.ErrorMessage);
+        _logger?.LogInformation("Service recovery: {Status}", recovery.IsSuccess ? "configured" : recovery.ErrorMessage);
 
         var safeBoot = SafeBootRegistrar.Register(ServiceName, "Winknow 核心管控服务", _logger);
-        _logger.LogInformation("SafeBoot registration: {Status}", safeBoot.IsSuccess ? "registered" : safeBoot.ErrorMessage);
+        _logger?.LogInformation("SafeBoot registration: {Status}", safeBoot.IsSuccess ? "registered" : safeBoot.ErrorMessage);
     }
 
     private Task OnMessageReceived(IpcMessage message, CancellationToken cancellationToken)
     {
-        _logger.LogDebug("Received IPC message: Type={MessageType} RequestId={RequestId}",
+        _logger?.LogDebug("Received IPC message: Type={MessageType} RequestId={RequestId}",
             message.MessageType, message.RequestId);
         return Task.CompletedTask;
     }
