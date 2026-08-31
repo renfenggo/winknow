@@ -40,7 +40,16 @@ public sealed class PolicyLoader
         try
         {
             var json = File.ReadAllText(filePath);
-            var policy = JsonSerializer.Deserialize<PolicyFile>(json, JsonOptions);
+            PolicyFile? policy;
+
+            // 尝试直接解析JSON（标准格式）
+            policy = JsonSerializer.Deserialize<PolicyFile>(json, JsonOptions);
+
+            // 如果直接解析失败，尝试Base64编码格式
+            if (policy is null)
+            {
+                policy = PolicyFile.FromEncodedJson(json);
+            }
 
             if (policy is null)
             {

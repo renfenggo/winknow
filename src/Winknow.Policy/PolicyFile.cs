@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json.Serialization;
+using Winknow.Security;
 
 namespace Winknow.Policy;
 
@@ -27,6 +29,44 @@ public sealed class PolicyFile
 
     /// <summary>USB 管控配置。</summary>
     public UsbControlSection UsbControl { get; init; } = new();
+
+    /// <summary>
+    /// 将策略对象序列化为Base64编码的JSON字符串。
+    /// 用途：防止学生用记事本直接查看策略文件看到禁用进程明文。
+    /// </summary>
+    public string ToEncodedJson()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(this, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = false,
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+        });
+        var bytes = Encoding.UTF8.GetBytes(json);
+        return Convert.ToBase64String(bytes);
+    }
+
+    /// <summary>
+    /// 从Base64编码的JSON字符串反序列化策略对象。
+    /// </summary>
+    public static PolicyFile? FromEncodedJson(string encodedJson)
+    {
+        if (string.IsNullOrWhiteSpace(encodedJson))
+            return null;
+
+        try
+        {
+            var bytes = Convert.FromBase64String(encodedJson);
+            var json = Encoding.UTF8.GetString(bytes);
+            return System.Text.Json.JsonSerializer.Deserialize<PolicyFile>(json, new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>

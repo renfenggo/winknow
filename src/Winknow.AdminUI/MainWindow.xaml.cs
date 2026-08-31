@@ -6,6 +6,8 @@ using System.Windows.Threading;
 using Winknow.Core;
 using Winknow.Logging;
 using Winknow.Security;
+using Winknow.Licensing;
+using Microsoft.Extensions.Logging;
 
 namespace Winknow.AdminUI;
 
@@ -26,13 +28,26 @@ public partial class MainWindow : Window
 
     private MaintenanceSession? _session;
     private readonly DispatcherTimer _countdownTimer;
+    private readonly TeacherLicenseServer _licenseServer;
+    private readonly ILoggerFactory _loggerFactory;
 
     /// <summary>初始化主窗口。</summary>
     public MainWindow()
     {
         InitializeComponent();
+
         _countdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _countdownTimer.Tick += OnCountdownTick;
+
+        // 初始化授权服务器和日志
+        _loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+        var licenseLogger = _loggerFactory.CreateLogger<Winknow.Licensing.TeacherLicenseServer>();
+        _licenseServer = new TeacherLicenseServer(licenseLogger);
+
+        // 初始化课堂总览页面
+        var classroomLogger = _loggerFactory.CreateLogger<Winknow.AdminUI.ClassroomPage>();
+        var classroomPage = new ClassroomPage(_licenseServer, classroomLogger);
+        ClassroomTabItem.Content = classroomPage;
     }
 
     private void OnEnterMaintenanceClick(object sender, RoutedEventArgs e)

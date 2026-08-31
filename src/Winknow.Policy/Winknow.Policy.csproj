@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Winknow.Core\Winknow.Core.csproj" />
+    <ProjectReference Include="..\Winknow.Security\Winknow.Security.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -26,11 +26,11 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
-    public void ProductionProjects_ShouldBeFourteen()
+    public void ProductionProjects_ShouldBeFifteen()
     {
         var srcDir = Path.Combine(RepoRoot, "src");
         var csprojs = Directory.GetFiles(srcDir, "*.csproj", SearchOption.AllDirectories);
-        Assert.Equal(14, csprojs.Length);
+        Assert.Equal(15, csprojs.Length);
     }
 
     [Fact]

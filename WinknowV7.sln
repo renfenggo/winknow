@@ -59,6 +59,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Winknow.Guard.Tests", "test
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Winknow.DeviceSecurity.Tests", "tests\UnitTests\Winknow.DeviceSecurity.Tests\Winknow.DeviceSecurity.Tests.csproj", "{983BB0CB-4A8F-4777-BF4E-8FDE23F06B2B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Winknow.Licensing", "src\Winknow.Licensing\Winknow.Licensing.csproj", "{EE4F33F6-5423-401D-ABBF-251C4D24EE92}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -164,6 +166,10 @@ Global
 		{983BB0CB-4A8F-4777-BF4E-8FDE23F06B2B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{983BB0CB-4A8F-4777-BF4E-8FDE23F06B2B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{983BB0CB-4A8F-4777-BF4E-8FDE23F06B2B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EE4F33F6-5423-401D-ABBF-251C4D24EE92}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE4F33F6-5423-401D-ABBF-251C4D24EE92}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE4F33F6-5423-401D-ABBF-251C4D24EE92}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE4F33F6-5423-401D-ABBF-251C4D24EE92}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{A75AE182-1AF4-40FF-AFF9-CCCEC5A2CADA} = {A708931B-568A-4975-BF75-854A434B90EB}
@@ -191,5 +197,6 @@ Global
 		{F14082C8-8558-413D-A04F-E2ECFB7DE1EE} = {A7DE89CE-CFBA-445B-A4BB-91C227AA09D5}
 		{CC441A3E-B0D8-4ED5-9ED3-DB63E565D556} = {01E270BD-714B-497A-B32E-44401C07C585}
 		{983BB0CB-4A8F-4777-BF4E-8FDE23F06B2B} = {01E270BD-714B-497A-B32E-44401C07C585}
+		{EE4F33F6-5423-401D-ABBF-251C4D24EE92} = {A708931B-568A-4975-BF75-854A434B90EB}
 	EndGlobalSection
 EndGlobal

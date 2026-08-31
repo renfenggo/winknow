@@ -60,6 +60,14 @@ $updates = Get-Events @{ LogName = 'Application'; ProviderName = 'Winknow'; Id =
 $wmiAll = Get-Events @{ LogName = 'Application'; ProviderName = 'Winknow'; StartTime = $since } |
     Where-Object { $_.Message -match 'WMI watcher' }
 
+# ---- 2.1 授权系统事件锚点（阶段C新增）----
+$licenseHeartbeatSuccess = Get-Events @{ LogName = 'Application'; ProviderName = 'Winknow'; StartTime = $since } |
+    Where-Object { $_.Message -match 'LicenseHeartbeat|Device status changed to ONLINE' }
+$licenseHeartbeatFail = Get-Events @{ LogName = 'Application'; ProviderName = 'Winknow'; StartTime = $since } |
+    Where-Object { $_.Message -match 'Device status changed to GRACE_PERIOD|Device status changed to LOCKED|authorization failed' }
+$licenseUnlock = Get-Events @{ LogName = 'Application'; ProviderName = 'Winknow'; StartTime = $since } |
+    Where-Object { $_.Message -match 'Device unlocked successfully|Dynamic code verification|Fixed code verification' }
+
 # ---- 3. 资源 ----
 $resLines = @()
 foreach ($pn in $procs) {
@@ -111,8 +119,15 @@ Add-Line ("   - {0} 目录：{1} MB（audit.db：{2}）" -f $dataRoot, $rootMB, 
 Add-Line "8. 维护操作"
 Add-Line ("   - 维护事件（9002）：{0} 次" -f @($maint).Count)
 $maint | Select-Object -First 5 | ForEach-Object { Add-Line "     - $($_.TimeCreated.ToString('HH:mm:ss')) $($_.Message)" }
-Add-Line "9. 缺陷记录：__（P0/P1/P2）"
-Add-Line "10. 备注/异常：____"
+Add-Line "9. 授权验证（阶段C新增）"
+$licenseTotal = @($licenseHeartbeatSuccess).Count + @($licenseHeartbeatFail).Count
+$licenseSuccessRate = if ($licenseTotal -gt 0) { [math]::Round((@($licenseHeartbeatSuccess).Count / $licenseTotal) * 100, 1) } else { "N/A" }
+Add-Line ("   - 授权心跳成功率：{0}%（成功{1}，失败{2}）" -f $licenseSuccessRate, @($licenseHeartbeatSuccess).Count, @($licenseHeartbeatFail).Count)
+Add-Line ("   - 断网锁定触发次数：{0} 次（正常≈0）" -f @($licenseHeartbeatFail).Count)
+Add-Line ("   - 解锁操作次数：{0} 次（动态码/固定码）" -f @($licenseUnlock).Count)
+$licenseUnlock | Select-Object -First 5 | ForEach-Object { Add-Line "     - $($_.TimeCreated.ToString('HH:mm:ss')) $($_.Message)" }
+Add-Line "10. 缺陷记录：__（P0/P1/P2）"
+Add-Line "11. 备注/异常：____"
 Add-Line
 Add-Line "> 生成：Collect-CanaryMetrics.ps1 @$date；('__' 与勾选项为人工复核字段)"
 

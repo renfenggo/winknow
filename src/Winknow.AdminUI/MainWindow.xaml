@@ -33,5 +33,7 @@
         <TabItem Header="设备安全">
             <local:DeviceSecurityPage/>
         </TabItem>
+        <TabItem Header="课堂总览" x:Name="ClassroomTabItem">
+        </TabItem>
     </TabControl>
 </Window>

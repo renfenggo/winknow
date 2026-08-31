@@ -9,6 +9,8 @@ param(
     [string]$OutputRoot = "",
     # 跳过构建（复用已有产物）
     [switch]$SkipBuild,
+    # 跳过混淆（调试用）
+    [switch]$SkipObfuscation,
     # 构建后调用 Sign-Release.ps1（需要证书或 -TestCert）
     [switch]$Sign,
     # 签名脚本参数透传
@@ -56,13 +58,113 @@ if (-not $SkipBuild) {
     }
 }
 
-# ── 2. 默认策略入 payload ─────────────────────────────────────
+# ── 2. 混淆（publish → 混淆 → 签名 → manifest）──────────────────────
+# 混淆必须在签名前：签名改变文件字节，manifest必须描述最终分发字节
+if (-not $SkipObfuscation) {
+    Write-Step "代码混淆"
+    
+    # 检查 Obfuscar 是否已安装
+    $obfuscarExe = Get-Command obfuscar.console -ErrorAction SilentlyContinue
+    if (-not $obfuscarExe) {
+        # 尝试全局查找
+        $obfuscarExe = where.exe obfuscar.console 2>$null
+    }
+    
+    if (-not $obfuscarExe) {
+        Write-Host "未找到 Obfuscar，正在安装..." -ForegroundColor Yellow
+        dotnet tool install --global Obfuscar.GlobalTool
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Obfuscar 安装失败" -ForegroundColor Red
+            throw "无法安装 Obfuscar"
+        }
+        # 刷新PATH
+        $env:PATH = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    }
+    
+    # 检查混淆配置
+    $obfuscarConfig = Join-Path $scriptRoot 'obfuscar.xml'
+    if (-not (Test-Path $obfuscarConfig)) {
+        throw "未找到 Obfuscar 配置文件: $obfuscarConfig"
+    }
+    
+    # 准备混淆工作目录
+    $obfuscatedOutput = Join-Path $OutputRoot 'obfuscated_temp'
+    if (Test-Path $obfuscatedOutput) {
+        Remove-Item -Path $obfuscatedOutput -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $obfuscatedOutput | Out-Null
+    
+    # 执行混淆
+    Write-Host "执行混淆，配置: $obfuscarConfig"
+    $env:OBFUSCAR_INPUT_PATH = $OutputRoot
+    $env:OBFUSCAR_OUTPUT_PATH = $obfuscatedOutput
+    
+    obfuscar.console "$obfuscarConfig"
+    if ($LASTEXITCODE -ne 0) {
+        throw "混淆失败（exit $LASTEXITCODE）"
+    }
+    
+    # 备份原始DLL
+    $backupDir = Join-Path $OutputRoot 'original_backup'
+    if (Test-Path $backupDir) {
+        Remove-Item -Path $backupDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+    
+    # 混淆的DLL列表
+    $obfuscatedDlls = @(
+        'services\Winknow.ControlService.dll',
+        'services\Winknow.GuardService.dll',
+        'services\Winknow.Core.dll',
+        'services\Winknow.Security.dll',
+        'services\Winknow.Ipc.dll',
+        'services\Winknow.Logging.dll',
+        'services\Winknow.Network.dll',
+        'services\Winknow.Policy.dll',
+        'services\Winknow.ProcessControl.dll',
+        'services\Winknow.DeviceSecurity.dll',
+        'services\Winknow.SessionAgent.dll',
+        'services\Winknow.Licensing.dll',
+        'updater\Winknow.TrustedUpdater.dll'
+    )
+    
+    # 备份并替换混淆后的DLL
+    foreach ($dllPath in $obfuscatedDlls) {
+        $originalPath = Join-Path $OutputRoot $dllPath
+        $backupPath = Join-Path $backupDir $dllPath
+        $obfuscatedPath = Join-Path $obfuscatedOutput $dllPath
+        
+        if (Test-Path $originalPath -and (Test-Path $obfuscatedPath)) {
+            # 备份原始文件
+            $backupSubDir = Split-Path $backupPath -Parent
+            if (-not (Test-Path $backupSubDir)) {
+                New-Item -ItemType Directory -Force -Path $backupSubDir | Out-Null
+            }
+            Copy-Item -Path $originalPath -Destination $backupPath -Force
+            
+            # 替换为混淆版本
+            Copy-Item -Path $obfuscatedPath -Destination $originalPath -Force
+            Write-Host "  已混淆: $dllPath" -ForegroundColor Green
+        }
+    }
+    
+    # 清理临时文件
+    if (Test-Path $obfuscatedOutput) {
+        Remove-Item -Path $obfuscatedOutput -Recurse -Force
+    }
+    
+    Write-Host "混淆完成，原始DLL已备份到: $backupDir" -ForegroundColor Green
+} else {
+    Write-Step "跳过混淆（-SkipObfuscation 指定）"
+}
+
+# ── 3. 默认策略入 payload ─────────────────────────────────────
 Write-Step "部署默认策略文件"
 $policyDir = Join-Path $OutputRoot 'policy'
 New-Item -ItemType Directory -Force -Path $policyDir | Out-Null
 Copy-Item "$solutionRoot\policies\default_policy_v7.0.json" $policyDir -Force
 
-# ── 3. 签名（可选）——必须在生成清单之前：签名改变文件字节，──
+# ── 4. 签名（可选）——必须在生成清单之前：签名改变文件字节，──
 #    release_manifest.json 必须描述最终分发字节（灰度 Stage 0 核验教训）
 if ($Sign) {
     Write-Step "调用 Sign-Release.ps1"
@@ -72,7 +174,7 @@ if ($Sign) {
     & "$PSScriptRoot\Sign-Release.ps1" @signArgs
 }
 
-# ── 4. SHA256 清单（与 RecoveryVault manifest 同格式约定） ─────
+# ── 5. SHA256 清单（与 RecoveryVault manifest 同格式约定） ─────
 Write-Step "生成 SHA256 清单 release_manifest.json"
 $files = Get-ChildItem $OutputRoot -Recurse -File |
     Where-Object { $_.Name -ne 'release_manifest.json' }

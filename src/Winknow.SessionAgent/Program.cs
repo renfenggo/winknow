@@ -1,5 +1,6 @@
 using System.Security.Principal;
 using Winknow.Ipc;
+using Microsoft.Extensions.Logging;
 
 namespace Winknow.SessionAgent;
 
@@ -27,37 +28,66 @@ internal static class Program
         // 2. 获取当前用户 SID
         var senderSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
 
-        // 3. 连接 ControlService IPC
+        // 3. 创建锁屏遮罩组件
+        var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+        var logger = loggerFactory.CreateLogger<LockOverlay>();
+        var lockOverlay = new LockOverlay(logger);
+
+        // 4. 连接 ControlService IPC
         using var cts = new CancellationTokenSource();
         await using var ipcClient = new IpcClient(IpcConstants.ControlPipeName, senderSid);
 
         var connectResult = await ipcClient.ConnectAsync(cts.Token);
         if (!connectResult.IsSuccess)
         {
+            logger.LogError("Failed to connect to ControlService IPC");
             return 3;
         }
 
-        // 4. 注册消息处理
-        ipcClient.MessageReceived += OnMessageReceived;
+        // 5. 注册消息处理
+        ipcClient.MessageReceived += (message, cancellationToken) =>
+            OnMessageReceived(message, cancellationToken, lockOverlay, logger);
 
-        // 5. 启动心跳定时器
+        // 6. 启动心跳定时器
         using var heartbeatTimer = new PeriodicTimer(TimeSpan.FromSeconds(30));
         _ = HeartbeatLoopAsync(ipcClient, heartbeatTimer, cts.Token);
 
-        // 6. 等待退出信号
+        // 7. 等待退出信号
         await WaitForExitAsync(cts.Token);
 
-        // 7. 清理
+        // 8. 清理
         cts.Cancel();
-        ipcClient.MessageReceived -= OnMessageReceived;
+        ipcClient.MessageReceived -= (message, cancellationToken) =>
+            OnMessageReceived(message, cancellationToken, lockOverlay, logger);
+        lockOverlay.Dispose();
 
         return 0;
     }
 
-    private static Task OnMessageReceived(IpcMessage message, CancellationToken cancellationToken)
+    private static Task OnMessageReceived(IpcMessage message, CancellationToken cancellationToken, LockOverlay lockOverlay, ILogger<LockOverlay> logger)
     {
+        logger.LogInformation("Received IPC message: {MessageType}", message.MessageType);
+
         // TODO 第3周：处理策略更新、屏幕控制等命令
         // TODO 第3周：根据消息类型执行对应操作
+
+        // 处理锁屏遮罩消息
+        if (message.MessageType == 1001) // 假设1001是LockOverlay消息类型
+        {
+            var action = System.Text.Encoding.UTF8.GetString(message.Payload);
+            switch (action.ToUpperInvariant())
+            {
+                case "SHOW":
+                    lockOverlay.Show();
+                    logger.LogInformation("Lock overlay shown");
+                    break;
+                case "HIDE":
+                    lockOverlay.Hide();
+                    logger.LogInformation("Lock overlay hidden");
+                    break;
+            }
+        }
+
         return Task.CompletedTask;
     }
 
