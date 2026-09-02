@@ -34,7 +34,7 @@ public sealed class HeartbeatLease
         /// <summary>服务版本。</summary>
         [JsonPropertyName("version")] public string Version { get; init; } = string.Empty;
 
-        /// <summary>服务名（如 Winknow Control Service）。</summary>
+        /// <summary>服务名（SCM 内部名，如 WinknowControl）。</summary>
         [JsonPropertyName("serviceName")] public string ServiceName { get; init; } = string.Empty;
 
         /// <summary>进程启动时间（ISO 8601 UTC），用于识别"重启后又活过来"的新实例。</summary>

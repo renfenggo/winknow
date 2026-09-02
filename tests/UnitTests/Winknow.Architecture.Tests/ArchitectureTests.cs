@@ -79,16 +79,47 @@ public sealed class ArchitectureTests
     }
 
     [Theory]
-    [InlineData("Winknow.ControlService", "Winknow Control Service")]
-    [InlineData("Winknow.GuardService", "Winknow Guard Service")]
-    public void WindowsServices_ShouldUseAddWindowsService(string projectName, string expectedServiceName)
+    [InlineData("Winknow.ControlService", "ServiceNames.ControlService")]
+    [InlineData("Winknow.GuardService", "ServiceNames.GuardService")]
+    public void WindowsServices_ShouldUseAddWindowsService(string projectName, string serviceNamesMember)
     {
         var programPath = Path.Combine(RepoRoot, "src", projectName, "Program.cs");
         var content = File.ReadAllText(programPath);
 
         Assert.Contains("AddWindowsService", content, StringComparison.Ordinal);
-        Assert.Contains(expectedServiceName, content, StringComparison.Ordinal);
+        Assert.Contains(serviceNamesMember, content, StringComparison.Ordinal);
         Assert.DoesNotContain("UseWindowsService", content, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PR-01（ADR-001/TD-01）：生产代码禁止出现服务名字符串字面量，
+    /// 服务名只能引用 <see cref="Winknow.Core.ServiceNames"/>（唯一可信源在 Winknow.Core.ServiceNames.cs）。
+    /// </summary>
+    [Fact]
+    public void ProductionCode_ShouldNotHardcodeServiceNames()
+    {
+        var srcRoot = Path.Combine(RepoRoot, "src");
+        var soleSource = Path.Combine("Winknow.Core", "ServiceNames.cs");
+        var checkedFiles = 0;
+
+        foreach (var file in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            var relative = file.Substring(srcRoot.Length + 1);
+            if (relative.Equals(soleSource, StringComparison.OrdinalIgnoreCase)) continue;
+
+            // 剔除注释行（/// 文档注释允许提及显示名）
+            var code = string.Join(Environment.NewLine,
+                File.ReadAllLines(file)
+                    .Where(l => !l.TrimStart().StartsWith("///") && !l.TrimStart().StartsWith("//")));
+
+            Assert.DoesNotContain("Winknow Control Service", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("Winknow Guard Service", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"WinknowControl\"", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"WinknowGuard\"", code, StringComparison.Ordinal);
+            checkedFiles++;
+        }
+
+        Assert.True(checkedFiles > 10, "应扫描到足够多的源文件，否则测试失效");
     }
 
     [Fact]

@@ -1,9 +1,11 @@
 using Winknow.ControlService;
+using Winknow.Core;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddWindowsService(options =>
 {
-    options.ServiceName = "Winknow Control Service";
+    // SCM 内部名：必须与安装器 sc create 的服务名一致（ADR-001/TD-01）
+    options.ServiceName = ServiceNames.ControlService;
 });
 builder.Services.AddHostedService<Worker>();
 

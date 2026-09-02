@@ -30,8 +30,12 @@ if (-not [IO.Path]::IsPathRooted($OutputRoot)) {
 
 $targets = @(
     # (项目, payload 子目录)  服务 → services；更新器 → updater；控制台 → admin
+    # SessionAgent → services\agent（随 Current 槽部署，ADR-001/TD-02）
+    # RecoveryTool → tools（常驻工具，安装到 {app}\Tools）
     @{ Project = 'Winknow.ControlService'; Out = 'services' },
     @{ Project = 'Winknow.GuardService';   Out = 'services' },
+    @{ Project = 'Winknow.SessionAgent';   Out = 'services\agent' },
+    @{ Project = 'Winknow.RecoveryTool';   Out = 'tools' },
     @{ Project = 'Winknow.TrustedUpdater'; Out = 'updater' },
     @{ Project = 'Winknow.AdminUI';        Out = 'admin' }
 )
@@ -63,13 +67,9 @@ if (-not $SkipBuild) {
 if (-not $SkipObfuscation) {
     Write-Step "代码混淆"
     
-    # 检查 Obfuscar 是否已安装
+    # 检查 Obfuscar 是否已安装（Get-Command 即查 PATH；
+    # 不用 where.exe 兜底：其 stderr 在 PS5.1 + $ErrorActionPreference=Stop 下会中断脚本）
     $obfuscarExe = Get-Command obfuscar.console -ErrorAction SilentlyContinue
-    if (-not $obfuscarExe) {
-        # 尝试全局查找
-        $obfuscarExe = where.exe obfuscar.console 2>$null
-    }
-    
     if (-not $obfuscarExe) {
         Write-Host "未找到 Obfuscar，正在安装..." -ForegroundColor Yellow
         dotnet tool install --global Obfuscar.GlobalTool
@@ -94,12 +94,24 @@ if (-not $SkipObfuscation) {
     }
     New-Item -ItemType Directory -Force -Path $obfuscatedOutput | Out-Null
     
-    # 执行混淆
-    Write-Host "执行混淆，配置: $obfuscarConfig"
-    $env:OBFUSCAR_INPUT_PATH = $OutputRoot
-    $env:OBFUSCAR_OUTPUT_PATH = $obfuscatedOutput
+    # 执行混淆。Obfuscar v3 要求配置内全绝对路径、拒绝相对路径与 $(...) 展开——
+    # 从模板 obfuscar.xml 现场生成绝对路径配置：
+    #   ① $(InPath)\ 前缀 → payload 绝对路径；② InPath/OutPath 注入绝对值；
+    #   ③ 为各 payload 子目录补 AssemblySearchPath（引用解析，v3 全部要求绝对路径）
+    $searchPathXml = (@('services', 'services\agent', 'updater', 'tools', 'admin') |
+        ForEach-Object { Join-Path $OutputRoot $_ } |
+        Where-Object { Test-Path $_ } |
+        ForEach-Object { '    <AssemblySearchPath path="{0}" />' -f $_ }) -join "`r`n"
+    $configXml = [IO.File]::ReadAllText($obfuscarConfig)
+    $configXml = $configXml.Replace('$(InPath)\', "$OutputRoot\")
+    $configXml = $configXml -replace '<Var name="InPath" value="[^"]*"\s*/>', ('<Var name="InPath" value="{0}" />' -f $OutputRoot)
+    $configXml = $configXml -replace '<Var name="OutPath" value="[^"]*"\s*/>', ('<Var name="OutPath" value="{0}" />' -f $obfuscatedOutput)
+    $configXml = $configXml -replace '<Obfuscator>', ('<Obfuscator>' + "`r`n" + $searchPathXml)
+    $generatedConfig = Join-Path $obfuscatedOutput 'obfuscar.generated.xml'
+    [IO.File]::WriteAllText($generatedConfig, $configXml)
     
-    obfuscar.console "$obfuscarConfig"
+    Write-Host "执行混淆，配置: $generatedConfig（由模板生成，绝对路径）"
+    obfuscar.console "$generatedConfig"
     if ($LASTEXITCODE -ne 0) {
         throw "混淆失败（exit $LASTEXITCODE）"
     }
@@ -123,18 +135,20 @@ if (-not $SkipObfuscation) {
         'services\Winknow.Policy.dll',
         'services\Winknow.ProcessControl.dll',
         'services\Winknow.DeviceSecurity.dll',
-        'services\Winknow.SessionAgent.dll',
-        'services\Winknow.Licensing.dll',
-        'updater\Winknow.TrustedUpdater.dll'
+        'services\agent\Winknow.SessionAgent.dll',
+        'updater\Winknow.TrustedUpdater.dll',
+        'tools\Winknow.RecoveryTool.dll'
     )
     
     # 备份并替换混淆后的DLL
     foreach ($dllPath in $obfuscatedDlls) {
         $originalPath = Join-Path $OutputRoot $dllPath
         $backupPath = Join-Path $backupDir $dllPath
-        $obfuscatedPath = Join-Path $obfuscatedOutput $dllPath
+        # Obfuscar 输出到 OutPath 时不保留子目录结构（按程序集文件名平铺）
+        $obfuscatedPath = Join-Path $obfuscatedOutput (Split-Path $dllPath -Leaf)
         
-        if (Test-Path $originalPath -and (Test-Path $obfuscatedPath)) {
+        # 注意括号：不加括号时 -and 会被解析为 Test-Path 的参数（PS 经典坑）
+        if ((Test-Path $originalPath) -and (Test-Path $obfuscatedPath)) {
             # 备份原始文件
             $backupSubDir = Split-Path $backupPath -Parent
             if (-not (Test-Path $backupSubDir)) {
@@ -164,7 +178,22 @@ $policyDir = Join-Path $OutputRoot 'policy'
 New-Item -ItemType Directory -Force -Path $policyDir | Out-Null
 Copy-Item "$solutionRoot\policies\default_policy_v7.0.json" $policyDir -Force
 
-# ── 4. 签名（可选）——必须在生成清单之前：签名改变文件字节，──
+# ── 4. 更新验签公钥入 payload（开发/测试自签；正式密钥离线管理，见 ADR-003）──
+Write-Step "确保更新验签公钥存在"
+$keysDir = Join-Path $scriptRoot 'keys'
+if (-not (Test-Path $keysDir)) { New-Item -ItemType Directory -Force -Path $keysDir | Out-Null }
+$updatePrivateKey = Join-Path $keysDir 'update_private.pem'
+$updatePublicKey = Join-Path $keysDir 'update_public.pem'
+if (-not (Test-Path $updatePublicKey)) {
+    $updaterExe = Join-Path $OutputRoot 'updater\Winknow.TrustedUpdater.exe'
+    if (-not (Test-Path $updaterExe)) { throw "未找到 $updaterExe（先完成构建，或去掉 -SkipBuild）" }
+    & $updaterExe keygen $updatePrivateKey $updatePublicKey
+    if ($LASTEXITCODE -ne 0) { throw "keygen 失败（exit $LASTEXITCODE）" }
+    Write-Host "已生成开发密钥对: $updatePrivateKey / $updatePublicKey" -ForegroundColor Yellow
+}
+Copy-Item $updatePublicKey (Join-Path $OutputRoot 'publickey.pem') -Force
+
+# ── 5. 签名（可选）——必须在生成清单之前：签名改变文件字节，──
 #    release_manifest.json 必须描述最终分发字节（灰度 Stage 0 核验教训）
 if ($Sign) {
     Write-Step "调用 Sign-Release.ps1"
@@ -174,10 +203,10 @@ if ($Sign) {
     & "$PSScriptRoot\Sign-Release.ps1" @signArgs
 }
 
-# ── 5. SHA256 清单（与 RecoveryVault manifest 同格式约定） ─────
+# ── 6. SHA256 清单（与 RecoveryVault manifest 同格式约定） ─────
 Write-Step "生成 SHA256 清单 release_manifest.json"
 $files = Get-ChildItem $OutputRoot -Recurse -File |
-    Where-Object { $_.Name -ne 'release_manifest.json' }
+    Where-Object { $_.Name -ne 'release_manifest.json' -and $_.FullName -notmatch '\\(original_backup|obfuscated_temp)\\' }
 $entries = foreach ($f in $files) {
     $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     [PSCustomObject]@{

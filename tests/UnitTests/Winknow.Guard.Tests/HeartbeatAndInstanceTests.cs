@@ -1,3 +1,4 @@
+using Winknow.Core;
 using Winknow.Ipc;
 using Winknow.Security;
 
@@ -29,7 +30,7 @@ public sealed class HeartbeatAndInstanceTests : IDisposable
         var now = DateTimeOffset.UtcNow;
         var lease = new HeartbeatLease(_tempDir, clock: () => now);
 
-        var write = lease.Write(1234, "Winknow Control Service", "7.0.0");
+        var write = lease.Write(1234, ServiceNames.ControlService, "7.0.0");
         Assert.True(write.IsSuccess, write.ErrorMessage);
 
         var status = lease.Check();

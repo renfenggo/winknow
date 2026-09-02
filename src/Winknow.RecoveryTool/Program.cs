@@ -23,14 +23,12 @@ namespace Winknow.RecoveryTool;
 /// </summary>
 internal static class Program
 {
-    private static readonly string ConfigDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Winknow", "maintain");
+    private static readonly string ConfigDir = ProductPaths.MaintainDir;
     private static readonly string ConfigPath = Path.Combine(ConfigDir, "maintain.json");
     private static readonly string RecoveryPath = Path.Combine(ConfigDir, "recovery-codes.json");
     private static readonly string AuditDbPath = Path.Combine(ConfigDir, "audit.db");
 
-    private static readonly string[] ManagedServices = ["Winknow Control Service", "Winknow Guard Service"];
+    private static readonly string[] ManagedServices = ServiceNames.Managed;
 
     private static int Main(string[] args)
     {
@@ -309,9 +307,8 @@ internal static class Program
             Console.WriteLine($"删除配置目录失败: {ex.Message}");
         }
 
-        // 3. 删除策略目录（如存在）
-        var policyDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow", "policies");
+        // 3. 删除策略目录（如存在，ADR-001/TD-02 生效策略位置）
+        var policyDir = ProductPaths.PoliciesDir;
         try
         {
             if (Directory.Exists(policyDir))

@@ -17,14 +17,12 @@ namespace Winknow.AdminUI;
 /// </summary>
 public partial class MainWindow : Window
 {
-    private static readonly string ConfigDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Winknow", "maintain");
+    private static readonly string ConfigDir = ProductPaths.MaintainDir;
     private static readonly string ConfigPath = Path.Combine(ConfigDir, "maintain.json");
     private static readonly string RecoveryPath = Path.Combine(ConfigDir, "recovery-codes.json");
     private static readonly string AuditDbPath = Path.Combine(ConfigDir, "audit.db");
 
-    private static readonly string[] ManagedServices = ["Winknow Control Service", "Winknow Guard Service"];
+    private static readonly string[] ManagedServices = ServiceNames.Managed;
 
     private MaintenanceSession? _session;
     private readonly DispatcherTimer _countdownTimer;

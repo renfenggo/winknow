@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.ServiceProcess;
 using System.Text;
 using System.Text.Json;
+using Winknow.Core;
 using Winknow.Core.Results;
 
 namespace Winknow.TrustedUpdater;
@@ -18,16 +19,13 @@ namespace Winknow.TrustedUpdater;
 /// </summary>
 internal static class Program
 {
-    private static readonly string DeployRoot = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Winknow", "deploy");
-
-    private static readonly string DataDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Winknow");
+    // 路径与服务名统一走 ProductPaths/ServiceNames（ADR-001：唯一可信源）
+    private static readonly string DeployRoot = ProductPaths.DeployRoot;
+    private static readonly string DataDir = ProductPaths.DataRoot;
     private const string ProductId = "Winknow.V7";
 
-    private static readonly string[] ManagedServices = ["Winknow Control Service", "Winknow Guard Service"];
+    // SCM 内部名（ADR-001/TD-01）：ServiceController 用内部名，非显示名
+    private static readonly string[] ManagedServices = ServiceNames.Managed;
 
     private static int Main(string[] args)
     {
@@ -41,6 +39,8 @@ internal static class Program
                 "rollback" => RunRollback(),
                 "status" => RunStatus(),
                 "sign" => RunSign(args[1..]),
+                "snapshot" => RunSnapshot(),
+                "keygen" => RunKeygen(args[1..]),
                 "help" or "--help" or "-h" => PrintHelp(),
                 _ => UnknownCommand(args[0])
             };
@@ -189,6 +189,60 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// 建立/刷新可信恢复快照（Recovery Vault，来源 Current 槽）。
+    /// 安装器安装完成与成功更新后调用（v8 计划 PR-02）。
+    /// </summary>
+    private static int RunSnapshot()
+    {
+        var currentDir = Path.Combine(DeployRoot, "Current");
+        var vault = new RecoveryVault(DeployRoot);
+        var version = DetectCurrentVersion(currentDir) ?? Constants.Version;
+
+        var r = vault.SnapshotFrom(currentDir, version);
+        if (r.IsSuccess)
+        {
+            Console.WriteLine($"恢复快照已建立: {vault.ManifestPath}（版本 {version}）");
+            return 0;
+        }
+        Console.Error.WriteLine($"[ERROR] {r.ErrorMessage}");
+        return 1;
+    }
+
+    private static string? DetectCurrentVersion(string currentDir)
+    {
+        try
+        {
+            var manifestPath = Path.Combine(currentDir, "manifest.json");
+            if (!File.Exists(manifestPath)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            return doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 开发辅助：生成更新签名 RSA 密钥对（PKCS#8 私钥 + SPKI 公钥 PEM）。
+    /// 生产密钥必须在 HSM/受控环境生成，禁止使用本命令产物。
+    /// </summary>
+    private static int RunKeygen(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("用法: keygen <privateKey.pem> <publicKey.pem>");
+            return 1;
+        }
+
+        var rsa = RSA.Create(3072);
+        File.WriteAllText(args[0], rsa.ExportPkcs8PrivateKeyPem());
+        File.WriteAllText(args[1], rsa.ExportSubjectPublicKeyInfoPem());
+        Console.WriteLine($"已生成密钥对: {args[0]} / {args[1]}（仅限开发/测试）");
+        return 0;
+    }
+
     private static void StopManagedServices()
     {
         foreach (var svc in ManagedServices)
@@ -276,6 +330,8 @@ internal static class Program
               rollback                                   手动回滚到 Previous
               status                                     当前版本与可回滚状态
               sign <manifestDir> <privateKey.pem>        开发辅助：签名 manifest（生产在 HSM）
+              snapshot                                   建立/刷新可信恢复快照（来源 Current 槽）
+              keygen <privateKey.pem> <publicKey.pem>    开发辅助：生成更新签名密钥对（生产在 HSM）
               help                                       显示本帮助
 
             运行身份：管理员

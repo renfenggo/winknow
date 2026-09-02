@@ -30,9 +30,7 @@ public sealed class DeviceSecurityAssessor
     public DeviceSecurityAssessor(ILogger? logger = null, string? dataDir = null)
     {
         _logger = logger;
-        _dataDir = dataDir ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "Winknow", Constants.DeviceSecurity.DataDirName);
+        _dataDir = dataDir ?? ProductPaths.DeviceSecurityDir;
     }
 
     /// <summary>数据目录（核验记录与人工核验表持久化处）。</summary>

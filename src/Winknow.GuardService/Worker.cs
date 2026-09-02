@@ -11,7 +11,7 @@ namespace Winknow.GuardService;
 
 /// <summary>
 /// GuardService 守护进程工作器（V7.0 第 10 周守护增强版）。
-/// 运行身份：LocalSystem | 服务名：Winknow Guard Service
+/// 运行身份：LocalSystem | 服务名：WinknowGuard（SCM 内部名，见 ServiceNames）
 ///
 /// 职责链（每 <see cref="Constants.Guard.HeartbeatIntervalSeconds"/> 秒一轮）：
 /// 1. 更新模式检查：UpdateModeFlag 有效时暂停干预（防更新交叉拉起）；
@@ -24,7 +24,8 @@ namespace Winknow.GuardService;
 /// </summary>
 internal sealed class Worker : BackgroundService
 {
-    private const string ControlServiceName = "Winknow Control Service";
+    // SCM 内部名（ADR-001/TD-01）：ServiceController/OpenService 全部用内部名，非显示名
+    private const string ControlServiceName = ServiceNames.ControlService;
     private const string ControlServiceExe = "Winknow.ControlService.exe";
 
     private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(Constants.Guard.HeartbeatIntervalSeconds);
@@ -51,9 +52,8 @@ internal sealed class Worker : BackgroundService
     internal Worker(ILogger<Worker> logger)
     {
         _logger = logger;
-        _dataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
-        _deployRoot = Path.Combine(_dataDir, "deploy");
+        _dataDir = ProductPaths.DataRoot;
+        _deployRoot = ProductPaths.DeployRoot;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

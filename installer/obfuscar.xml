@@ -26,6 +26,13 @@
     <!-- 更新器需要一些稳定的公共API用于清单验证 -->
   </Module>
 
+  <Module file="$(InPath)\tools\Winknow.RecoveryTool.dll">
+    <!-- 恢复工具（常驻工具副本） -->
+    <SkipMethod type="*" name="*.ToString" />
+    <SkipMethod type="*" name="*.GetHashCode" />
+    <SkipMethod type="*" name="*.Equals" />
+  </Module>
+
   <!-- 核心库（需要依赖库） -->
   <Module file="$(InPath)\services\Winknow.Core.dll">
     <!-- 结果类型 - 反射契约，必须保持原名 -->
@@ -109,7 +116,7 @@
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.SessionAgent.dll">
+  <Module file="$(InPath)\services\agent\Winknow.SessionAgent.dll">
     <!-- 会话代理需要稳定API用于IPC通信 -->
     <SkipType name="SessionMutex" />
     
@@ -118,19 +125,7 @@
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <!-- 授权库（阶段B新增） -->
-  <Module file="$(InPath)\services\Winknow.Licensing.dll">
-    <!-- 授权验证需要稳定API用于IPC通信和JSON序列化 -->
-    <SkipType name="ILicenseProvider" />
-    <SkipType name="DeviceLicenseClient" />
-    <SkipType name="LicenseToken" />
-    <SkipType name="LicenseEnforcement" />
-    <SkipType name="TeacherLicenseServer" />
-    <SkipType name="OfflineGraceStore" />
-    
-    <SkipMethod type="*" name="*.ToString" />
-    <SkipMethod type="*" name="*.GetHashCode" />
-    <SkipMethod type="*" name="*.Equals" />
-  </Module>
+  <!-- 注：Winknow.Licensing 仅随 AdminUI 发布（服务未引用，阶段 4 授权接入后重评）；
+       AdminUI 为 WPF 不参与混淆 -->
 
 </Obfuscator>

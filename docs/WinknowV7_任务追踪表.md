@@ -18,8 +18,8 @@
 
 | 任务 ID | 内容 | 负责人 | 状态 | 验收人 | 证据 |
 |---|---|---|---|---|---|
-| PR-01 | ServiceNames + ProductPaths 常量统一 | AI | 待办 | PO | |
-| PR-02 | 发布 payload 补全 + 安装器修复（snapshot/策略路径/公钥） | AI | 待办 | PO | |
+| PR-01 | ServiceNames + ProductPaths 常量统一 | AI | 待验收 | PO | src/Winknow.Core/ServiceNames.cs + ProductPaths.cs；13 个文件改用常量；架构测试新增字面量禁令（486→487 测试全过） |
+| PR-02 | 发布 payload 补全 + 安装器修复（snapshot/策略路径/公钥） | AI | 待验收 | PO | Build-Release 补发 SessionAgent/RecoveryTool + 混淆绝对路径配置修复 + keygen/公钥步骤；iss 落位 active_policy.json/{app}\Tools/publickey.pem/snapshot 无参/{autopf}；发布管线端到端 exit 0（payload 278 文件哈希全对）。注：ISCC 本机未装，安装包编译待具备 Inno Setup 6 的环境复验 |
 
 ## 阶段 2：IPC 与 SessionAgent 闭环
 

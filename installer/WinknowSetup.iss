@@ -3,10 +3,11 @@
 ; V7.0 第 13 周：服务安装、权限配置、策略部署、.NET 8 运行时检测
 ;
 ; 目录布局（与 DeploymentSlots/PeerVerifier/HeartbeatLease 约定一致）：
-;   {autopf}\Winknow            —— AdminUI、TrustedUpdater（更新器常驻副本）
+;   {autopf}\Winknow            —— AdminUI、TrustedUpdater、Tools（常驻副本）
 ;   {commonappdata}\Winknow     —— 策略、审计库、设备安全数据、心跳
-;     └─ deploy\Current         —— 服务运行位置（更新时 TrustedUpdater 切槽）
+;     └─ deploy\Current         —— 服务运行位置（更新时 TrustedUpdater 切槽；agent\ 随槽）
 ;     └─ deploy\Previous|Staging
+;     └─ policies\active_policy.json —— 生效策略（ADR-001/TD-02）
 ;     └─ device_security\
 ;
 ; 使用：先用 Build-Release.ps1 生成 installer\payload，再 ISCC 编译本脚本
@@ -54,13 +55,19 @@ Source: "payload\services\*"; DestDir: "{commonappdata}\Winknow\deploy\Current";
 Source: "payload\updater\*"; DestDir: "{app}\Updater"; Components: updater; Flags: ignoreversion recursesubdirs
 ; 管理控制台
 Source: "payload\admin\*"; DestDir: "{app}\AdminUI"; Components: admin; Flags: ignoreversion recursesubdirs
-; 默认策略（仅首次安装部署；升级不覆盖机房定制策略）
-Source: "payload\policy\default_policy_v7.0.json"; DestDir: "{commonappdata}\Winknow"; DestName: "policy.json"; Flags: onlyifdoesntexist
+; 默认策略 → policies\active_policy.json（ADR-001/TD-02 生效策略路径；
+; 仅首次安装部署，升级不覆盖机房定制策略，策略版本随更新事务一致回滚）
+Source: "payload\policy\default_policy_v7.0.json"; DestDir: "{commonappdata}\Winknow\policies"; DestName: "active_policy.json"; Flags: onlyifdoesntexist
+; 维护/恢复工具（常驻副本，不受槽切换影响）
+Source: "payload\tools\*"; DestDir: "{app}\Tools"; Flags: ignoreversion recursesubdirs
+; 更新验签公钥 → deploy 根（ProductPaths.UpdatePublicKeyPath；随包轮换，允许覆盖）
+Source: "payload\publickey.pem"; DestDir: "{commonappdata}\Winknow\deploy"; Flags: ignoreversion
 
 [Dirs]
 ; ProgramData 数据目录：BUILTIN\Users 只读（学生不可改策略/审计）
 Name: "{commonappdata}\Winknow"; Permissions: users-readexec
 Name: "{commonappdata}\Winknow\deploy"; Permissions: users-readexec
+Name: "{commonappdata}\Winknow\policies"; Permissions: users-readexec
 Name: "{commonappdata}\Winknow\device_security"; Permissions: users-readexec
 
 [Services]
@@ -78,8 +85,8 @@ Filename: "{sys}\sc.exe"; Parameters: "failure WinknowGuard reset= 86400 actions
 ; 先起 Guard 后起 Control（Guard 立即进入守护位，Control 起来后租约生效）
 Filename: "{sys}\sc.exe"; Parameters: "start WinknowGuard"; Flags: runhidden; StatusMsg: "启动 WinknowGuard"; Check: StartServicesNow
 Filename: "{sys}\sc.exe"; Parameters: "start WinknowControl"; Flags: runhidden; StatusMsg: "启动 WinknowControl"; Check: StartServicesNow
-; 可信恢复快照（首次安装建立 Vault，供第 10 周自动修复使用）
-Filename: "{app}\Updater\Winknow.TrustedUpdater.exe"; Parameters: "snapshot ""{commonappdata}\Winknow\deploy"""; Flags: runhidden; StatusMsg: "建立可信恢复快照"
+; 可信恢复快照（首次安装建立 Vault，供第 10 周自动修复使用；部署根用命令内置默认值，与 ProductPaths.DeployRoot 一致）
+Filename: "{app}\Updater\Winknow.TrustedUpdater.exe"; Parameters: "snapshot"; Flags: runhidden; StatusMsg: "建立可信恢复快照"
 
 [UninstallRun]
 ; 停止并删除服务（到达此处前必须已通过维护模式授权——见 [Code] 提示）
@@ -120,7 +127,8 @@ begin
   // ② 文件系统：Program Files\dotnet\shared\Microsoft.WindowsDesktop.App 下存在 8.x 目录
   if not Result then
   begin
-    runtimeDir := ExpandConstant('{commoncf}\dotnet\shared\Microsoft.WindowsDesktop.App');
+    // {commoncf} 指 Common Files，dotnet 实际装在 Program Files —— 用 {autopf}（64 位模式下为 Program Files）
+    runtimeDir := ExpandConstant('{autopf}\dotnet\shared\Microsoft.WindowsDesktop.App');
     if DirExists(runtimeDir + '\8.0') then
       Result := True;
   end;

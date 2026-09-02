@@ -12,14 +12,15 @@ namespace Winknow.ControlService;
 
 /// <summary>
 /// ControlService 核心管控服务的工作器。
-/// 运行身份：LocalSystem | 服务名：Winknow Control Service
+/// 运行身份：LocalSystem | 服务名：WinknowControl（SCM 内部名，见 ServiceNames）
 ///
 /// 禁止：不承担交互式键盘钩子（由 SessionAgent 负责）
 /// </summary>
 internal sealed class Worker : BackgroundService
 {
-    // 服务名：必须与 Program.cs 中 AddWindowsService(options => options.ServiceName) 保持一致
-    private const string ServiceName = "Winknow Control Service";
+    // 服务名：必须与 Program.cs 中 AddWindowsService(options => options.ServiceName)、
+    // 安装器 sc create WinknowControl 保持一致（ADR-001/TD-01：SCM 用内部名，非显示名）
+    private const string ServiceName = ServiceNames.ControlService;
 
     private readonly ILogger<Worker> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -56,8 +57,7 @@ internal sealed class Worker : BackgroundService
     {
         // 第 10 周单实例守卫：全局 Mutex 竞争唯一运行权，拿不到锁说明已有实例在运行，
         // 本实例直接退出（防更新/守护交叉拉起产生双进程）
-        var dataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
+        var dataDir = ProductPaths.DataRoot;
         _instanceGuard = new SingleInstanceGuard(@"Global\Winknow_ControlService_Instance", dataDir);
         if (!_instanceGuard.IsAcquired)
         {
@@ -75,8 +75,19 @@ internal sealed class Worker : BackgroundService
         ApplySelfProtection();
 
         // 1. 加载策略文件（单一可信源：白名单/高风险黑名单/网络/USB 均来自此）
-        var policyPath = Path.Combine(
-            AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
+        // ADR-001/TD-02：生效策略在 %ProgramData%\Winknow\policies\active_policy.json（独立于槽位，
+        // 策略版本随更新事务一致回滚）；未走安装器的开发/裸跑场景回退到输出目录内置默认策略
+        var policyPath = ProductPaths.ActivePolicyPath;
+        if (!File.Exists(policyPath))
+        {
+            var bundledFallback = Path.Combine(
+                AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
+            if (File.Exists(bundledFallback))
+            {
+                policyPath = bundledFallback;
+                _logger?.LogWarning("Active policy not found, falling back to bundled default: {Path}", bundledFallback);
+            }
+        }
         if (File.Exists(policyPath))
         {
             var policyLoader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
@@ -99,9 +110,9 @@ internal sealed class Worker : BackgroundService
 
         // 8. 自保护加固
         var serviceDacl = new ServiceDaclProtector(_loggerFactory.CreateLogger<ServiceDaclProtector>());
-        serviceDacl.Harden("Winknow Control Service");
-        serviceDacl.Harden("Winknow Guard Service");
-        serviceDacl.DisableStopForUsers("Winknow Control Service");
+        serviceDacl.Harden(ServiceNames.ControlService);
+        serviceDacl.Harden(ServiceNames.GuardService);
+        serviceDacl.DisableStopForUsers(ServiceNames.ControlService);
         _logger?.LogInformation("Service DACL hardened");
 
         // 9. 注册表保护 + 策略执行
@@ -128,9 +139,7 @@ internal sealed class Worker : BackgroundService
 
         // 10. 密钥与日志完整性基础设施（第 9 周）
         var deviceId = DeviceId.Generate();
-        var programDataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
-        var keyDir = Path.Combine(programDataDir, "keys");
+        var keyDir = ProductPaths.KeysDir;
         Directory.CreateDirectory(keyDir);
 
         _keyGenerator = new DeviceLogKeyGenerator(
@@ -165,7 +174,7 @@ internal sealed class Worker : BackgroundService
         _eventLogAnchor.WriteSecurityAnchor("ServiceStarted", deviceId);
 
         // 数据保留管理器：启动时清理过期记录
-        var dbPath = Path.Combine(programDataDir, Constants.Logging.DatabaseFileName);
+        var dbPath = Path.Combine(ProductPaths.DataRoot, Constants.Logging.DatabaseFileName);
         _retentionManager = new DataRetentionManager(
             dbPath, logger: _loggerFactory.CreateLogger<DataRetentionManager>());
         var purgeResult = _retentionManager.PurgeExpired();

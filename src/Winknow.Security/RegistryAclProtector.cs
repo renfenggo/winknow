@@ -89,11 +89,11 @@ public sealed class RegistryAclProtector
     {
         var allProtected = true;
 
-        // 保护服务配置
-        var servicePath = @"SYSTEM\CurrentControlSet\Services\Winknow Control Service";
+        // 服务注册表键使用 SCM 内部名（ADR-001/TD-01）
+        var servicePath = @$"SYSTEM\CurrentControlSet\Services\{Winknow.Core.ServiceNames.ControlService}";
         allProtected &= ProtectKey(Registry.LocalMachine, servicePath);
 
-        var guardPath = @"SYSTEM\CurrentControlSet\Services\Winknow Guard Service";
+        var guardPath = @$"SYSTEM\CurrentControlSet\Services\{Winknow.Core.ServiceNames.GuardService}";
         allProtected &= ProtectKey(Registry.LocalMachine, guardPath);
 
         // 保护 Winknow 策略注册表
