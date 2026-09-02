@@ -1,13 +1,20 @@
 # Winknow V7.0 修改实施计划书（AI 执行版）
 
-> ⚠️ **已废弃（v2.0）**：本文档已被 v8.0 取代，执行请以 `docs/WinknowV7_修改实施计划书_AI执行版_v8.md` 为唯一有效版本。
->
-> 文档版本：2.0（已废弃）
+> 文档版本：8.0（取代 v2.0，为唯一有效执行版本）
 > 编制日期：2026-09-02
-> 代码基线：`develop@028c6d394f3b2ca93cb0679678d48de71c5acb46`
+> 代码基线：`develop@028c6d394f3b2ca93cb0679678d48de71c5acb46`（阶段 0 须以执行当日最新 develop 提交重新生成基线）
 > 配套说明：`docs/WinknowV7_项目说明书_AI分析版.md`
+> 已取代：v2.0《WinknowV7_修改实施计划书_AI执行版.md》与《WinknowV7_全链路打通工作计划.md》
+>
+> v8.0 修订要点：
+> ① 周期口径区别人日预算与日历周期（阶段 8 灰度另需 3～4 周日历时间）；
+> ② TD-02/P6-03 补充策略版本随更新事务一致回滚，防止新策略与回滚后旧服务不兼容；
+> ③ TD-05 管道身份改为可行方案：ACL 允许 Authenticated Users 连接 + 应用层 Impersonation 真实 SID 比对（管道 ACL 不支持按 SID 动态放行）；
+> ④ P2-05 键盘钩子降为独立功能开关 `KeyboardPolicyEnabled`，默认关闭，不作为 P2 阶段退出条件；
+> ⑤ 覆盖率门禁改为棘轮制（入场基线起步、只升不降、终值 85%/75%）；
+> ⑥ B-02 表述修正（Licensing 为类库，真实缺口是 ControlService 未引用它）。
 > 计划性质：工程整改、功能闭环、安全加固、测试与发布计划
-> 推荐周期：2 名 Windows/.NET 开发 + 1 名测试，8～10 周；单人实施约 14～18 周
+> 推荐周期：2 名 Windows/.NET 开发 + 1 名测试，开发预算 8～10 周（约 80～100 人日）；单人实施约 14～18 周；阶段 8 灰度另需约 3～4 周日历时间，项目总日历周期约 12～14 周
 
 ## 1. 编制目的
 
@@ -37,7 +44,7 @@
 | 编号 | 问题 | 影响 |
 |---|---|---|
 | B-01 | 安装器内部服务名与代码使用的显示名不一致 | 服务保护、启停、守护、维护和更新可能失败 |
-| B-02 | 发布产物缺少 SessionAgent、RecoveryTool、Licensing | 安装后功能不完整 |
+| B-02 | 发布产物缺少 SessionAgent、RecoveryTool；且 ControlService 未引用 Licensing 类库 | 安装后功能不完整，授权未接入核心管控 |
 | B-03 | 策略安装路径与 ControlService 查找路径不一致 | 服务退回默认规则或无法应用策略 |
 | B-04 | 安装器调用不存在的 `snapshot` 命令 | 安装流程可能失败，Recovery Vault 未建立 |
 | B-05 | ControlService 没有启动/管理 SessionAgent | 锁屏、会话交互和键盘策略不工作 |
@@ -100,6 +107,7 @@
 - 日志与密钥：`%ProgramData%\Winknow\logs`、`%ProgramData%\Winknow\keys`。
 - AdminUI 和常驻 Updater：`%ProgramFiles%\Winknow`。
 - 所有路径集中在 `Winknow.Core.ProductPaths`，支持测试时注入临时根目录。
+- 策略与二进制版本必须在更新事务中保持一致：`active_policy.json` 的激活版本由更新编排管理，apply/rollback 时随事务一并切换（见 P6-03 第 8 条）。
 
 ### TD-03：V7 网络能力边界
 
@@ -125,8 +133,8 @@
 
 ### TD-05：IPC 身份
 
-- Named Pipe ACL 只允许 SYSTEM、Administrators 和当前已登记学生会话 SID。
-- 服务端从 Pipe Impersonation Token 获取真实 SID，不信任消息体的 `SenderSid`。
+- Named Pipe ACL 在创建时一次性设置：允许 SYSTEM、Administrators、Authenticated Users 以最小读写权限连接（管道 ACL 不支持按 SID 动态放行）。
+- "已登记学生会话"的准入不在 ACL 层实现，而在应用层完成：服务端从 Pipe Impersonation Token 获取真实 SID，与会话登记表比对，不信任消息体的 `SenderSid`。
 - 首次连接执行握手，绑定协议版本、会话 ID、进程 ID、设备 ID 和随机挑战。
 - RequestId 单调性以单连接或协商后的连接会话为范围，重连不会永久误判。
 
@@ -328,7 +336,7 @@ flowchart LR
 
 1. 服务端通过 Pipe impersonation 获取真实 WindowsIdentity/SID。
 2. 删除以消息 `SenderSid` 作为身份凭证的逻辑；可以保留该字段用于审计，但必须与真实 SID 比对。
-3. Pipe ACL 动态允许已登记学生 SID，只赋予连接所需最小权限。
+3. Pipe ACL 允许 Authenticated Users 以最小权限连接；已登记学生 SID 的准入在应用层按 Impersonation 真实 SID 比对，不动态修改 ACL。
 4. 增加握手消息：协议版本、PID、SessionId、DeviceId、ClientNonce、ServerNonce。
 5. 为每条消息增加最大 Payload 限制和严格长度检查。
 6. RequestId 防重放以连接会话为边界；重连产生新 SessionNonce。
@@ -384,7 +392,9 @@ V7 必需消息：
 
 每个命令必须有响应、超时和幂等语义。
 
-### 任务 P2-05：会话内键盘与系统入口策略
+### 任务 P2-05：会话内键盘与系统入口策略（独立开关，不作为 P2 退出条件）
+
+本任务由功能开关 `KeyboardPolicyEnabled` 控制，默认关闭；P2 阶段退出不依赖本任务，可在阶段 7 完成攻击与恢复性验证后按灰度策略启用。低级键盘钩子存在永久键盘失效与杀毒软件拦截风险，启用前必须满足本节全部可恢复性要求。
 
 1. 对可拦截快捷键使用低级键盘钩子，但钩子只运行在 SessionAgent 的交互会话。
 2. Ctrl+Alt+Delete 等 Secure Attention Sequence 不得宣称可由普通钩子拦截，应通过 Windows 账户、组策略和系统入口配置限制相关操作。
@@ -402,8 +412,8 @@ V7 必需消息：
 - 标准用户不能伪造管理员命令。
 - 4K/高 DPI/双显示器锁屏显示正常。
 - IPC 断线、半包、乱码、超大包、重放和超时均有测试。
-- 普通学习模式和严格考试模式的快捷键矩阵逐项通过，且不采集按键正文。
-- Agent 被强制结束后不会遗留失效钩子或永久键盘阻塞。
+- （仅当 `KeyboardPolicyEnabled` 启用时）普通学习模式和严格考试模式的快捷键矩阵逐项通过，且不采集按键正文。
+- （仅当 `KeyboardPolicyEnabled` 启用时）Agent 被强制结束后不会遗留失效钩子或永久键盘阻塞。
 
 ### P2 回滚
 
@@ -653,6 +663,7 @@ V7 必需消息：
 5. 签名、ProductId、版本、兼容矩阵和 Hash 全部通过后才进入槽位切换。
 6. 停服务失败立即中止，不吞异常。
 7. Agent、Policy、Control、Guard 版本和健康探针全部真实执行。
+8. 更新事务状态文件必须记录 PolicyVersion：apply 成功后激活新策略；rollback 时连同策略一并回滚到上一可用版本，防止新策略字段与回滚后的旧服务不兼容导致策略加载失败退回默认。
 
 ### 任务 P6-04：Recovery Vault
 
@@ -694,7 +705,7 @@ CI 必须增加：
 2. Release build，0 warning、0 error。
 3. 每个测试程序集单独执行并解析 TRX，执行数量必须大于 0。
 4. 统一测试总数基线，测试数异常下降时失败。
-5. 覆盖率门禁：核心安全类行覆盖率 ≥ 85%，整体 ≥ 75%；高风险分支需分支覆盖。
+5. 覆盖率棘轮门禁：入场基线为核心安全类行覆盖率 ≥ 60%、整体 ≥ 50%，此后每个迭代只升不降；最终目标核心安全类 ≥ 85%、整体 ≥ 75%；高风险分支需分支覆盖。
 6. `dotnet list package --vulnerable --include-transitive`，High/Critical 为 0。
 7. 安装 payload 必需文件和 manifest 完整性检查。
 8. Inno Setup 实际编译。
@@ -899,7 +910,7 @@ Windows 实机/VM 证据：
 ```text
 你正在修改 Winknow V7.0。请同时阅读：
 1. docs/WinknowV7_项目说明书_AI分析版.md
-2. docs/WinknowV7_修改实施计划书_AI执行版.md
+2. docs/WinknowV7_修改实施计划书_AI执行版_v8.md（唯一有效计划版本；v2.0 与《全链路打通工作计划》已废弃）
 
 执行要求：
 - 以当前源码和测试为事实，不把需求/完成报告当成实现证据。
