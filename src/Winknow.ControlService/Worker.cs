@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Winknow.ControlService.Sessions;
 using Winknow.Core;
 using Winknow.DeviceSecurity;
 using Winknow.Ipc;
@@ -46,6 +47,7 @@ internal sealed class Worker : BackgroundService
     private DataRetentionManager? _retentionManager;
     private SingleInstanceGuard? _instanceGuard;
     private HeartbeatLease? _heartbeatLease;
+    private SessionManager? _sessionManager;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
     {
@@ -197,15 +199,25 @@ internal sealed class Worker : BackgroundService
             highRisk);
         _terminator = new ProcessTerminator(_loggerFactory.CreateLogger<ProcessTerminator>());
 
-        // 3. 启动 IPC 服务端
+        // 3. 启动 IPC 服务端（P2-01/P2-02）：
+        //    - expectedDeviceId：握手校验客户端与本机 DeviceId 一致；
+        //    - admissionCheck：学生 Agent 仅当会话已登记（SessionManager 于用户登录时登记+拉起）且
+        //      管道 Impersonation 真实 SID 与登记 SID 一致才授予（ADR-001/TD-05）
         var authenticator = IpcAuthenticator.CreateForControlService(deviceId);
+        _sessionManager = new SessionManager(_loggerFactory, ipcServer: null);
         _ipcServer = new IpcServer(
             IpcConstants.ControlPipeName,
             authenticator,
-            _loggerFactory.CreateLogger<IpcServer>());
+            _loggerFactory.CreateLogger<IpcServer>(),
+            admissionCheck: _sessionManager.CheckAdmission,
+            expectedDeviceId: deviceId);
+        _sessionManager.AttachServer(_ipcServer);
         _ipcServer.MessageReceived += OnMessageReceived;
         await _ipcServer.StartAsync();
         _logger?.LogInformation("IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
+
+        // 3b. 会话生命周期：WTS 轮询 → 登记/拉起 SessionAgent（SessionAgentEnabled=0 可禁用）
+        _sessionManager.Start();
 
         // 4. 启动 WMI 进程实时监听
         _wmiMonitor = new WmiProcessMonitor(_loggerFactory.CreateLogger<WmiProcessMonitor>());
@@ -415,10 +427,38 @@ internal sealed class Worker : BackgroundService
         _logger?.LogInformation("SafeBoot registration: {Status}", safeBoot.IsSuccess ? "registered" : safeBoot.ErrorMessage);
     }
 
-    private Task OnMessageReceived(IpcMessage message, CancellationToken cancellationToken)
+    /// <summary>
+    /// IPC 消息处理（P2-01 新签名：含发送方连接上下文，会话路由键为 SessionId）。
+    /// 阶段 2 闭环：ShowLock/HideLock 广播到全部登记会话的 Agent（AdminUI 定向控制属阶段 3）。
+    /// </summary>
+    private async Task OnMessageReceived(
+        IpcMessage message, IpcConnectionContext context, CancellationToken cancellationToken)
     {
-        _logger?.LogDebug("Received IPC message: Type={MessageType} RequestId={RequestId}",
-            message.MessageType, message.RequestId);
-        return Task.CompletedTask;
+        _logger?.LogDebug("Received IPC message: Type={MessageType} RequestId={RequestId} Session={SessionId}",
+            message.MessageType, message.RequestId, context.SessionId);
+
+        switch (message.MessageType)
+        {
+            case IpcConstants.MessageTypeShowLock:
+            case IpcConstants.MessageTypeHideLock:
+                var messageType = message.MessageType;
+                _logger?.LogInformation("Broadcasting {LockAction} to {Count} registered session(s)",
+                    messageType == IpcConstants.MessageTypeShowLock ? "lock" : "unlock",
+                    _sessionManager?.Registry.Count ?? 0);
+                foreach (var record in _sessionManager?.Registry.Snapshot() ?? [])
+                {
+                    if (_ipcServer is not null && _ipcServer.TryGetSession(record.SessionId, out var connection) &&
+                        connection is not null)
+                    {
+                        await connection.SendAsync(messageType, message.Payload, cancellationToken);
+                    }
+                }
+
+                break;
+
+            default:
+                // 其余消息类型（策略下发、状态上报等）在阶段 3 接入
+                break;
+        }
     }
 }

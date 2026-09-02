@@ -69,6 +69,24 @@ public sealed class IpcMessage
         };
     }
 
+    /// <summary>
+    /// 构造对 <paramref name="request"/> 的响应消息。
+    /// 约定：响应沿用请求的 RequestId，便于请求方匹配（P2-04 请求-响应语义）。
+    /// </summary>
+    public static IpcMessage CreateResponse(IpcMessage request, ushort messageType, byte[] payload, string? senderSid = null)
+    {
+        return new IpcMessage
+        {
+            Version = CurrentVersion,
+            RequestId = request.RequestId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Nonce = SecurityUtils.GenerateNonce(),
+            SenderSid = senderSid ?? WindowsIdentity.GetCurrent().User?.Value ?? string.Empty,
+            MessageType = messageType,
+            Payload = payload
+        };
+    }
+
     /// <summary>序列化为字节数组。</summary>
     public byte[] ToBytes()
     {

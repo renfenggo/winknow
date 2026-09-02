@@ -30,6 +30,9 @@ public sealed class PolicyFile
     /// <summary>USB 管控配置。</summary>
     public UsbControlSection UsbControl { get; init; } = new();
 
+    /// <summary>会话管控配置。</summary>
+    public SessionControlSection SessionControl { get; init; } = new();
+
     /// <summary>
     /// 将策略对象序列化为Base64编码的JSON字符串。
     /// 用途：防止学生用记事本直接查看策略文件看到禁用进程明文。
@@ -331,4 +334,16 @@ public sealed class HidDevicesSection
 {
     /// <summary>是否允许使用 HID 设备（键盘、鼠标）。</summary>
     public bool Enabled { get; init; } = true;
+}
+
+/// <summary>
+/// 会话管控配置（P2-05）。
+/// </summary>
+public sealed class SessionControlSection
+{
+    /// <summary>
+    /// 键盘钩子（WH_KEYBOARD_LL）独立开关，默认关闭。
+    /// 钩子本体属阶段 7 灰度项，本开关仅作策略承载，不构成阶段 2 退出条件。
+    /// </summary>
+    public bool KeyboardPolicyEnabled { get; init; } = false;
 }

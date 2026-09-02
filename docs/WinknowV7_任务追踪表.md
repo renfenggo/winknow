@@ -25,9 +25,9 @@
 
 | 任务 ID | 内容 | 负责人 | 状态 | 验收人 | 证据 |
 |---|---|---|---|---|---|
-| PR-03 | IPC 真实 SID（Impersonation）+ 握手协议 | AI | 待办 | PO | |
-| PR-04 | SessionManager/WtsSessionMonitor/SessionAgentLauncher + Agent 消息泵 | AI | 待办 | PO | |
-| P2-05 | 键盘钩子（`KeyboardPolicyEnabled` 独立开关，默认关） | AI | 待办 | PO | |
+| PR-03 | IPC 真实 SID（Impersonation）+ 握手协议 | AI | 待验收 | PO | IpcServer 先读 Hello 后经管道 Impersonation 取真实 SID 作为唯一凭证；消息体 SenderSid 仅审计（FixedTimeEquals 一致性校验）；连接级 RequestId 严格递增（IpcConnectionGuard）+ Nonce 全局防重放；Pipe ACL（SYSTEM/Admins 完全控制 + Authenticated Users 读写）；回环集成测试 6 例（握手准入/拒绝/设备不匹配/推送/请求-响应/超时/断连清理） |
+| PR-04 | SessionManager/WtsSessionMonitor/SessionAgentLauncher + Agent 消息泵 | AI | 待验收 | PO | Sessions 四件套（SessionRegistry/WtsSessionMonitor/SessionAgentLauncher/SessionManager）+ TerminalServicesApi（WTS 枚举/QueryUserToken/CreateProcessAsUser）；SessionAgent [STAThread] 消息泵 + PostThreadMessage 跨线程锁屏 + 指数退避重连 + 心跳断线检测；Worker 集成准入回调与关闭广播；修复：Impersonation 须在读取 Hello 之后（Windows 管道语义）；544/544 测试全过 |
+| P2-05 | 键盘钩子（`KeyboardPolicyEnabled` 独立开关，默认关） | AI | 待验收 | PO | PolicyFile 新增 SessionControlSection.KeyboardPolicyEnabled（默认 false）；JSON 往返与旧版回退测试 3 例。钩子本体为阶段 7 灰度项，本阶段仅落开关（不作为 P2 退出条件） |
 
 ## 阶段 3：维护、卸载与授权安全
 

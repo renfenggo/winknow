@@ -49,4 +49,32 @@ public static class SecurityUtils
     /// <summary>Generates a 16-byte nonce.</summary>
     /// <returns>The generated nonce.</returns>
     public static byte[] GenerateNonce() => GenerateRandomBytes(16);
+
+    /// <summary>
+    /// 固定时间字节数组比较（防时序侧信道）。
+    /// 用于比较 SID、摘要等敏感值；长度不同时仍执行完整比较路径。
+    /// </summary>
+    public static bool FixedTimeEquals(byte[] left, byte[] right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        if (left.Length != right.Length)
+        {
+            // 长度不同也走一遍比较，避免通过长度差异提前泄露
+            System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                left, left.Length == right.Length ? right : left);
+            return false;
+        }
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(left, right);
+    }
+
+    /// <summary>
+    /// 固定时间字符串比较（UTF-8 编码后逐字节比较，防时序侧信道）。
+    /// </summary>
+    public static bool FixedTimeEquals(string left, string right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        return FixedTimeEquals(Encoding.UTF8.GetBytes(left), Encoding.UTF8.GetBytes(right));
+    }
 }

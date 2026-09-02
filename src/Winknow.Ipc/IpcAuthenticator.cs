@@ -6,19 +6,23 @@ using Winknow.Core.Results;
 namespace Winknow.Ipc;
 
 /// <summary>
-/// IPC 身份验证器和防重放检测器。
+/// IPC 身份验证器和防重放检测器（P2-01 重构，ADR-001/TD-05）。
 ///
-/// 校验规则（见《V7.0 组件架构设计》第 6.3 节）：
-/// 1. 时间戳偏差超过 ±60 秒 → 拒绝（防篡改时间）
-/// 2. RequestId 必须大于上次收到的值（防重放）
-/// 3. Nonce 在 5 分钟内不得重复（防重放）
-/// 4. SenderSid 必须属于允许的 SID 集合（身份验证）
-/// 5. DeviceId 必须与本机匹配（设备绑定）
+/// 身份唯一凭证：服务端通过 Pipe Impersonation 取得的真实 SID（realSid）。
+/// 消息体 SenderSid 仅用于审计，且必须与真实 SID 一致（固定时间比较）——伪造即拒绝。
+///
+/// 校验规则：
+/// 1. 协议版本必须一致（防降级）
+/// 2. MessageType 不得为 Error（防伪造错误消息注入）
+/// 3. 时间戳偏差超过 ±60 秒 → 拒绝（防篡改时间）
+/// 4. 真实 SID 必须在允许集合内（SYSTEM/Administrators；登记学生会话由准入回调判定）
+/// 5. SenderSid 必须与真实 SID 一致（固定时间比较）
+/// 6. Nonce 在 TTL 内不得重复（全局缓存，跨连接防重放）
+/// 7. RequestId 单调性由 IpcConnectionGuard 按连接维护（重连即重置）
 /// </summary>
 public sealed class IpcAuthenticator : IDisposable
 {
     private readonly ConcurrentDictionary<string, long> _nonceCache = new();
-    private readonly ConcurrentDictionary<string, uint> _lastRequestIdPerSid = new();
     private readonly HashSet<string> _allowedSids;
     private readonly string _expectedDeviceId;
     private readonly TimeProvider _timeProvider;
@@ -28,7 +32,7 @@ public sealed class IpcAuthenticator : IDisposable
     /// <summary>
     /// 创建 IPC 身份验证器。
     /// </summary>
-    /// <param name="allowedSids">允许的发送方 SID 集合（SYSTEM、Administrators、当前会话用户）。</param>
+    /// <param name="allowedSids">允许连接的真实 SID 集合（SYSTEM、Administrators、登记学生用户）。</param>
     /// <param name="expectedDeviceId">本机设备 ID。</param>
     /// <param name="timeProvider">时间提供者（便于测试）。</param>
     public IpcAuthenticator(IEnumerable<string> allowedSids, string expectedDeviceId, TimeProvider? timeProvider = null)
@@ -39,20 +43,31 @@ public sealed class IpcAuthenticator : IDisposable
         _lastCleanupTime = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
     }
 
+    /// <summary>真实 SID 是否在允许集合内（握手准入用）。</summary>
+    public bool IsSidAllowed(string sid)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sid);
+        return _allowedSids.Contains(sid);
+    }
+
     /// <summary>
     /// 验证消息身份和防重放。
     /// </summary>
-    public Result<IpcMessage> ValidateMessage(IpcMessage message, string? actualDeviceId = null)
+    /// <param name="message">待验证消息。</param>
+    /// <param name="realSid">服务端 Impersonation 取得的真实 SID（唯一身份凭证）。</param>
+    /// <param name="actualDeviceId">本机实际设备 ID（可选，用于设备绑定校验）。</param>
+    public Result<IpcMessage> ValidateMessage(IpcMessage message, string realSid, string? actualDeviceId = null)
     {
         ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrEmpty(realSid);
 
-        // 1. 协议版本校验
+        // 1. 协议版本校验（防降级）
         if (message.Version != IpcMessage.CurrentVersion)
         {
             return Result<IpcMessage>.Failure(ErrorCode.IpcReplayDetected, "Unsupported protocol version.");
         }
 
-        // 2. 消息类型校验（防止伪造消息类型）
+        // 2. 消息类型校验（防止伪造错误消息注入）
         if (message.MessageType == IpcConstants.MessageTypeError)
         {
             return Result<IpcMessage>.Failure(ErrorCode.InvalidParameter, "Error message type cannot be inbound.");
@@ -66,22 +81,20 @@ public sealed class IpcAuthenticator : IDisposable
             return Result<IpcMessage>.Failure(ErrorCode.IpcTimeout, "Message timestamp out of tolerance.");
         }
 
-        // 4. SenderSid 身份校验
-        if (string.IsNullOrEmpty(message.SenderSid) || !_allowedSids.Contains(message.SenderSid))
+        // 4. 真实 SID 准入校验（身份唯一凭证）
+        if (!_allowedSids.Contains(realSid))
         {
-            return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Sender SID not allowed.");
+            return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Impersonated SID not allowed.");
         }
 
-        // 5. RequestId 单调递增校验（按 SID 分组）
-        if (_lastRequestIdPerSid.TryGetValue(message.SenderSid, out var lastRequestId))
+        // 5. 声明 SID 与真实 SID 一致性（固定时间比较，防伪造）
+        if (string.IsNullOrEmpty(message.SenderSid) ||
+            !SecurityUtils.FixedTimeEquals(message.SenderSid, realSid))
         {
-            if (message.RequestId <= lastRequestId)
-            {
-                return Result<IpcMessage>.Failure(ErrorCode.IpcReplayDetected, "RequestId not monotonically increasing.");
-            }
+            return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Claimed SID does not match impersonated identity.");
         }
 
-        // 6. Nonce 重复校验（5 分钟内不得重复）
+        // 6. Nonce 重复校验（TTL 内不得重复，跨连接生效）
         var nonceKey = Convert.ToHexString(message.Nonce);
         var nonceExpiration = message.Timestamp + IpcConstants.NonceCacheTtlMs;
         if (_nonceCache.TryGetValue(nonceKey, out var existingExpiration))
@@ -93,14 +106,13 @@ public sealed class IpcAuthenticator : IDisposable
         }
 
         // 7. 设备 ID 校验（如果提供了实际设备 ID）
-        if (actualDeviceId is not null && !string.Equals(actualDeviceId, _expectedDeviceId, StringComparison.Ordinal))
+        if (actualDeviceId is not null && !SecurityUtils.FixedTimeEquals(actualDeviceId, _expectedDeviceId))
         {
             return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Device ID mismatch.");
         }
 
-        // 校验通过，更新缓存
+        // 校验通过，登记 Nonce
         _nonceCache[nonceKey] = nonceExpiration;
-        _lastRequestIdPerSid[message.SenderSid] = message.RequestId;
 
         // 8. 定期清理过期 Nonce
         TryCleanupExpiredNonces(now);
@@ -124,7 +136,6 @@ public sealed class IpcAuthenticator : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(sid);
         _allowedSids.Remove(sid);
-        _lastRequestIdPerSid.TryRemove(sid, out _);
     }
 
     /// <summary>
@@ -163,7 +174,6 @@ public sealed class IpcAuthenticator : IDisposable
     public void Dispose()
     {
         _nonceCache.Clear();
-        _lastRequestIdPerSid.Clear();
     }
 
     /// <summary>
