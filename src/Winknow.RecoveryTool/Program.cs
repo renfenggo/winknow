@@ -23,14 +23,13 @@ namespace Winknow.RecoveryTool;
 /// </summary>
 internal static class Program
 {
-    private static readonly string ConfigDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Winknow", "maintain");
+    private static readonly ProductPaths Paths = new();
+    private static readonly string ConfigDir = Paths.Maintenance;
     private static readonly string ConfigPath = Path.Combine(ConfigDir, "maintain.json");
     private static readonly string RecoveryPath = Path.Combine(ConfigDir, "recovery-codes.json");
     private static readonly string AuditDbPath = Path.Combine(ConfigDir, "audit.db");
 
-    private static readonly string[] ManagedServices = ["Winknow Control Service", "Winknow Guard Service"];
+    private static readonly string[] ManagedServices = Constants.Services.Managed;
 
     private static int Main(string[] args)
     {
@@ -235,6 +234,12 @@ internal static class Program
     /// </summary>
     private static int RunUninstall(string[] args)
     {
+        if (!IsAuthorizedForUninstall(args))
+        {
+            Console.Error.WriteLine("[ERROR] 卸载需要维护密码+TOTP 或一次性恢复码授权");
+            return 1;
+        }
+
         var autoYes = args.Any(a => a is "--yes" or "-y");
         if (!autoYes)
         {
@@ -310,8 +315,7 @@ internal static class Program
         }
 
         // 3. 删除策略目录（如存在）
-        var policyDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow", "policies");
+        var policyDir = Paths.Policies;
         try
         {
             if (Directory.Exists(policyDir))
@@ -328,6 +332,25 @@ internal static class Program
         audit.RecordEntry(actor, "uninstall", "authorized", "completed");
         Console.WriteLine("授权卸载完成");
         return 0;
+    }
+
+    private static bool IsAuthorizedForUninstall(string[] args)
+    {
+        var config = LoadConfig();
+        if (config is null) return false;
+
+        var recoveryCode = GetOption(args, "--recovery-code");
+        var recoveryStore = new RecoveryCodeStore(RecoveryPath);
+        if (!string.IsNullOrWhiteSpace(recoveryCode))
+        {
+            return recoveryStore.VerifyAndConsume(recoveryCode);
+        }
+
+        var password = GetOption(args, "--password");
+        var totp = GetOption(args, "--totp");
+        if (string.IsNullOrWhiteSpace(password) || string.IsNullOrWhiteSpace(totp)) return false;
+        return MaintenancePassword.Verify(password, config.PasswordHash)
+            && TotpGenerator.Verify(TotpGenerator.Base32Decode(config.TotpSecretBase32), totp);
     }
 
     private static void StopManagedServices()
@@ -462,7 +485,7 @@ internal static class Program
                 --reason <text>             维护原因
                 --timeout <minutes>         超时分钟（默认 15）
               status                        查看维护状态与审计记录
-              uninstall [--yes]             授权卸载（停删服务+策略+日志）
+              uninstall (--password <pwd> --totp <code> | --recovery-code <code>) [--yes]
               help                          显示本帮助
 
             运行身份：管理员

@@ -15,7 +15,9 @@ param(
     [switch]$Sign,
     # 签名脚本参数透传
     [string]$CertThumbprint = "",
-    [switch]$TestCert
+    [switch]$TestCert,
+    # RSA/ECDSA verification public key included with update-capable clients. Never pass a private key here.
+    [string]$PublicKeyPath = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +35,9 @@ $targets = @(
     @{ Project = 'Winknow.ControlService'; Out = 'services' },
     @{ Project = 'Winknow.GuardService';   Out = 'services' },
     @{ Project = 'Winknow.TrustedUpdater'; Out = 'updater' },
-    @{ Project = 'Winknow.AdminUI';        Out = 'admin' }
+    @{ Project = 'Winknow.AdminUI';        Out = 'admin' },
+    @{ Project = 'Winknow.SessionAgent';   Out = 'agent' },
+    @{ Project = 'Winknow.RecoveryTool';   Out = 'tools' }
 )
 
 function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
@@ -123,7 +127,7 @@ if (-not $SkipObfuscation) {
         'services\Winknow.Policy.dll',
         'services\Winknow.ProcessControl.dll',
         'services\Winknow.DeviceSecurity.dll',
-        'services\Winknow.SessionAgent.dll',
+        'agent\Winknow.SessionAgent.dll',
         'services\Winknow.Licensing.dll',
         'updater\Winknow.TrustedUpdater.dll'
     )
@@ -163,6 +167,18 @@ Write-Step "部署默认策略文件"
 $policyDir = Join-Path $OutputRoot 'policy'
 New-Item -ItemType Directory -Force -Path $policyDir | Out-Null
 Copy-Item "$solutionRoot\policies\default_policy_v7.0.json" $policyDir -Force
+
+# A public key is required for any signed, distributable release.  It is deliberately
+# copied as a separate verification artifact; private keys are never read by this script.
+if ($PublicKeyPath) {
+    if (-not (Test-Path $PublicKeyPath -PathType Leaf)) { throw "公钥不存在: $PublicKeyPath" }
+    $keyDir = Join-Path $OutputRoot 'keys'
+    New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+    Copy-Item $PublicKeyPath (Join-Path $keyDir 'publickey.pem') -Force
+}
+elseif ($Sign -and -not $TestCert) {
+    throw "正式签名构建必须提供 -PublicKeyPath（仅可提供验证公钥）"
+}
 
 # ── 4. 签名（可选）——必须在生成清单之前：签名改变文件字节，──
 #    release_manifest.json 必须描述最终分发字节（灰度 Stage 0 核验教训）

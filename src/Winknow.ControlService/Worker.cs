@@ -18,8 +18,7 @@ namespace Winknow.ControlService;
 /// </summary>
 internal sealed class Worker : BackgroundService
 {
-    // 服务名：必须与 Program.cs 中 AddWindowsService(options => options.ServiceName) 保持一致
-    private const string ServiceName = "Winknow Control Service";
+    private const string ServiceName = Constants.Services.Control;
 
     private readonly ILogger<Worker> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -56,8 +55,9 @@ internal sealed class Worker : BackgroundService
     {
         // 第 10 周单实例守卫：全局 Mutex 竞争唯一运行权，拿不到锁说明已有实例在运行，
         // 本实例直接退出（防更新/守护交叉拉起产生双进程）
-        var dataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
+        var paths = new ProductPaths();
+        paths.EnsureDirectories();
+        var dataDir = paths.Root;
         _instanceGuard = new SingleInstanceGuard(@"Global\Winknow_ControlService_Instance", dataDir);
         if (!_instanceGuard.IsAcquired)
         {
@@ -75,8 +75,7 @@ internal sealed class Worker : BackgroundService
         ApplySelfProtection();
 
         // 1. 加载策略文件（单一可信源：白名单/高风险黑名单/网络/USB 均来自此）
-        var policyPath = Path.Combine(
-            AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
+        var policyPath = paths.ActivePolicy;
         if (File.Exists(policyPath))
         {
             var policyLoader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
@@ -99,9 +98,9 @@ internal sealed class Worker : BackgroundService
 
         // 8. 自保护加固
         var serviceDacl = new ServiceDaclProtector(_loggerFactory.CreateLogger<ServiceDaclProtector>());
-        serviceDacl.Harden("Winknow Control Service");
-        serviceDacl.Harden("Winknow Guard Service");
-        serviceDacl.DisableStopForUsers("Winknow Control Service");
+        serviceDacl.Harden(Constants.Services.Control);
+        serviceDacl.Harden(Constants.Services.Guard);
+        serviceDacl.DisableStopForUsers(Constants.Services.Control);
         _logger?.LogInformation("Service DACL hardened");
 
         // 9. 注册表保护 + 策略执行
@@ -128,9 +127,8 @@ internal sealed class Worker : BackgroundService
 
         // 10. 密钥与日志完整性基础设施（第 9 周）
         var deviceId = DeviceId.Generate();
-        var programDataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
-        var keyDir = Path.Combine(programDataDir, "keys");
+        var programDataDir = paths.Root;
+        var keyDir = paths.Keys;
         Directory.CreateDirectory(keyDir);
 
         _keyGenerator = new DeviceLogKeyGenerator(

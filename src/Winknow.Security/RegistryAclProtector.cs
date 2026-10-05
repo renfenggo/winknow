@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Winknow.Core;
 
 namespace Winknow.Security;
 
@@ -90,10 +91,10 @@ public sealed class RegistryAclProtector
         var allProtected = true;
 
         // 保护服务配置
-        var servicePath = @"SYSTEM\CurrentControlSet\Services\Winknow Control Service";
+        var servicePath = $@"SYSTEM\CurrentControlSet\Services\{Constants.Services.Control}";
         allProtected &= ProtectKey(Registry.LocalMachine, servicePath);
 
-        var guardPath = @"SYSTEM\CurrentControlSet\Services\Winknow Guard Service";
+        var guardPath = $@"SYSTEM\CurrentControlSet\Services\{Constants.Services.Guard}";
         allProtected &= ProtectKey(Registry.LocalMachine, guardPath);
 
         // 保护 Winknow 策略注册表

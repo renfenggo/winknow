@@ -109,7 +109,7 @@
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.SessionAgent.dll">
+  <Module file="$(InPath)\agent\Winknow.SessionAgent.dll">
     <!-- 会话代理需要稳定API用于IPC通信 -->
     <SkipType name="SessionMutex" />
     

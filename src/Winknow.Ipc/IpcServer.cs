@@ -92,7 +92,8 @@ public sealed class IpcServer : IAsyncDisposable
 
     private NamedPipeServerStream CreateSecurePipeStream()
     {
-        // Pipe ACL：SYSTEM 完全控制 + Administrators 完全控制 + Everyone 读（连接后由身份验证层校验 SID）
+        // Pipe ACL permits only authenticated local users to establish a connection;
+        // authorization is then bound to the impersonated SID, never to wire metadata.
         var security = new PipeSecurity();
 
         var systemIdentity = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
@@ -107,10 +108,9 @@ public sealed class IpcServer : IAsyncDisposable
             PipeAccessRights.FullControl,
             AccessControlType.Allow));
 
-        // 允许 Everyone 连接（实际身份验证由 IpcAuthenticator 完成）
-        var everyoneIdentity = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+        var usersIdentity = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
         security.AddAccessRule(new PipeAccessRule(
-            everyoneIdentity,
+            usersIdentity,
             PipeAccessRights.ReadWrite,
             AccessControlType.Allow));
 
@@ -134,6 +134,13 @@ public sealed class IpcServer : IAsyncDisposable
             {
                 while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
                 {
+                    var actualSenderSid = GetClientSid(pipeStream);
+                    if (actualSenderSid is null)
+                    {
+                        _logger?.LogWarning("IPC connection rejected because the client identity could not be determined.");
+                        break;
+                    }
+
                     var messageResult = await ReadMessageAsync(pipeStream, cancellationToken).ConfigureAwait(false);
                     if (!messageResult.IsSuccess)
                     {
@@ -141,7 +148,7 @@ public sealed class IpcServer : IAsyncDisposable
                         break;
                     }
 
-                    var validation = _authenticator.ValidateMessage(messageResult.Data!);
+                    var validation = _authenticator.ValidateMessage(messageResult.Data!, actualSenderSid: actualSenderSid);
                     if (!validation.IsSuccess)
                     {
                         _logger?.LogWarning("IPC message rejected: {ErrorCode} {Message}",
@@ -159,6 +166,13 @@ public sealed class IpcServer : IAsyncDisposable
                     {
                         await MessageReceived.Invoke(validation.Data!, cancellationToken).ConfigureAwait(false);
                     }
+
+                    var ack = IpcMessage.Create(
+                        requestId: validation.Data!.RequestId,
+                        messageType: IpcConstants.MessageTypeAck,
+                        payload: Array.Empty<byte>(),
+                        senderSid: WindowsIdentity.GetCurrent().User?.Value ?? string.Empty);
+                    await WriteMessageAsync(pipeStream, ack, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -169,6 +183,27 @@ public sealed class IpcServer : IAsyncDisposable
         catch (Exception ex)
         {
             _logger?.LogError(ex, "IPC connection handler error.");
+        }
+    }
+
+    private static string? GetClientSid(NamedPipeServerStream pipeStream)
+    {
+        string? sid = null;
+        try
+        {
+            pipeStream.RunAsClient(() =>
+            {
+                sid = WindowsIdentity.GetCurrent(TokenAccessLevels.Query).User?.Value;
+            });
+            return sid;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
         }
     }
 

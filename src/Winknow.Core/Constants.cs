@@ -11,6 +11,22 @@ public static class Constants
     /// <summary>Gets the current product version.</summary>
     public const string Version = "7.0.0";
 
+    /// <summary>Windows service identities. SCM APIs must always use internal names.</summary>
+    public static class Services
+    {
+        /// <summary>SCM internal name of the control service.</summary>
+        public const string Control = "WinknowControl";
+        /// <summary>SCM internal name of the guard service.</summary>
+        public const string Guard = "WinknowGuard";
+        /// <summary>Human-readable control service name.</summary>
+        public const string ControlDisplayName = "Winknow Control Service";
+        /// <summary>Human-readable guard service name.</summary>
+        public const string GuardDisplayName = "Winknow Guard Service";
+
+        /// <summary>All SCM internal names managed by the product.</summary>
+        public static readonly string[] Managed = [Control, Guard];
+    }
+
     /// <summary>Defines registry locations owned by Winknow.</summary>
     public static class Registry
     {

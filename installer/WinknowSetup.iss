@@ -54,8 +54,14 @@ Source: "payload\services\*"; DestDir: "{commonappdata}\Winknow\deploy\Current";
 Source: "payload\updater\*"; DestDir: "{app}\Updater"; Components: updater; Flags: ignoreversion recursesubdirs
 ; 管理控制台
 Source: "payload\admin\*"; DestDir: "{app}\AdminUI"; Components: admin; Flags: ignoreversion recursesubdirs
+; 每个学生会话使用的交互式 Agent；由 ControlService 从 Current\agent 拉起
+Source: "payload\agent\*"; DestDir: "{commonappdata}\Winknow\deploy\Current\agent"; Components: services; Flags: ignoreversion recursesubdirs
+; 恢复工具不受部署槽切换影响
+Source: "payload\tools\*"; DestDir: "{app}\Tools"; Components: services; Flags: ignoreversion recursesubdirs
+; 更新包验证公钥；正式构建必须提供，测试构建可省略
+Source: "payload\keys\publickey.pem"; DestDir: "{commonappdata}\Winknow\deploy"; Components: updater; Flags: ignoreversion skipifsourcedoesntexist
 ; 默认策略（仅首次安装部署；升级不覆盖机房定制策略）
-Source: "payload\policy\default_policy_v7.0.json"; DestDir: "{commonappdata}\Winknow"; DestName: "policy.json"; Flags: onlyifdoesntexist
+Source: "payload\policy\default_policy_v7.0.json"; DestDir: "{commonappdata}\Winknow\policies"; DestName: "active_policy.json"; Flags: onlyifdoesntexist
 
 [Dirs]
 ; ProgramData 数据目录：BUILTIN\Users 只读（学生不可改策略/审计）
@@ -63,18 +69,12 @@ Name: "{commonappdata}\Winknow"; Permissions: users-readexec
 Name: "{commonappdata}\Winknow\deploy"; Permissions: users-readexec
 Name: "{commonappdata}\Winknow\device_security"; Permissions: users-readexec
 
-[Services]
-; ControlService：LocalSystem、开机自启、崩溃自动重启（SCM 第一层）
-Name: "WinknowControl"; DisplayName: "Winknow Control Service"; Description: "Winknow V7.0 管控服务（进程/网络/策略）"; \
-  Check: InstallServices; Flags: demand start; \
-  ; 用 [Run] 段 sc create 精确控制（见下），此处仅声明性占位
-
 [Run]
 ; 服务安装（LocalSystem + auto + 失败恢复策略——第 6 周 ServiceRecovery 语义）
-Filename: "{sys}\sc.exe"; Parameters: "create WinknowControl binPath= ""{commonappdata}\Winknow\deploy\Current\Winknow.ControlService.exe"" start= auto obj= LocalSystem"; Flags: runhidden; StatusMsg: "安装 WinknowControl 服务"
-Filename: "{sys}\sc.exe"; Parameters: "failure WinknowControl reset= 86400 actions= restart/5000/restart/10000/restart/30000"; Flags: runhidden; StatusMsg: "配置 WinknowControl 恢复策略"
-Filename: "{sys}\sc.exe"; Parameters: "create WinknowGuard binPath= ""{commonappdata}\Winknow\deploy\Current\Winknow.GuardService.exe"" start= auto obj= LocalSystem"; Flags: runhidden; StatusMsg: "安装 WinknowGuard 服务"
-Filename: "{sys}\sc.exe"; Parameters: "failure WinknowGuard reset= 86400 actions= restart/5000/restart/10000/restart/30000"; Flags: runhidden; StatusMsg: "配置 WinknowGuard 恢复策略"
+Filename: "{sys}\sc.exe"; Parameters: "create WinknowControl binPath= ""{commonappdata}\Winknow\deploy\Current\Winknow.ControlService.exe"" start= auto obj= LocalSystem"; Flags: runhidden waituntilterminated; StatusMsg: "安装 WinknowControl 服务"
+Filename: "{sys}\sc.exe"; Parameters: "failure WinknowControl reset= 86400 actions= restart/5000/restart/10000/restart/30000"; Flags: runhidden waituntilterminated; StatusMsg: "配置 WinknowControl 恢复策略"
+Filename: "{sys}\sc.exe"; Parameters: "create WinknowGuard binPath= ""{commonappdata}\Winknow\deploy\Current\Winknow.GuardService.exe"" start= auto obj= LocalSystem"; Flags: runhidden waituntilterminated; StatusMsg: "安装 WinknowGuard 服务"
+Filename: "{sys}\sc.exe"; Parameters: "failure WinknowGuard reset= 86400 actions= restart/5000/restart/10000/restart/30000"; Flags: runhidden waituntilterminated; StatusMsg: "配置 WinknowGuard 恢复策略"
 ; 先起 Guard 后起 Control（Guard 立即进入守护位，Control 起来后租约生效）
 Filename: "{sys}\sc.exe"; Parameters: "start WinknowGuard"; Flags: runhidden; StatusMsg: "启动 WinknowGuard"; Check: StartServicesNow
 Filename: "{sys}\sc.exe"; Parameters: "start WinknowControl"; Flags: runhidden; StatusMsg: "启动 WinknowControl"; Check: StartServicesNow
@@ -120,7 +120,7 @@ begin
   // ② 文件系统：Program Files\dotnet\shared\Microsoft.WindowsDesktop.App 下存在 8.x 目录
   if not Result then
   begin
-    runtimeDir := ExpandConstant('{commoncf}\dotnet\shared\Microsoft.WindowsDesktop.App');
+    runtimeDir := ExpandConstant('{autopf}\dotnet\shared\Microsoft.WindowsDesktop.App');
     if DirExists(runtimeDir + '\8.0') then
       Result := True;
   end;

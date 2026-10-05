@@ -127,7 +127,7 @@ public sealed class IpcMessage
         var payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(span[offset..]); offset += 4;
 
         // 防止恶意超大 PayloadLength（包括负数溢出）
-        if (payloadLength == 0 || payloadLength > (uint)IpcConstants.MaxMessageLength ||
+        if (payloadLength > (uint)IpcConstants.MaxMessageLength ||
             offset + payloadLength > (uint)buffer.Length)
         {
             throw new InvalidDataException("IPC message payload length exceeds buffer bounds.");

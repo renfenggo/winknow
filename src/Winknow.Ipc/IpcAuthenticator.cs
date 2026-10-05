@@ -19,7 +19,7 @@ public sealed class IpcAuthenticator : IDisposable
 {
     private readonly ConcurrentDictionary<string, long> _nonceCache = new();
     private readonly ConcurrentDictionary<string, uint> _lastRequestIdPerSid = new();
-    private readonly HashSet<string> _allowedSids;
+    private readonly ConcurrentDictionary<string, byte> _allowedSids;
     private readonly string _expectedDeviceId;
     private readonly TimeProvider _timeProvider;
     private readonly object _cleanupLock = new();
@@ -33,7 +33,8 @@ public sealed class IpcAuthenticator : IDisposable
     /// <param name="timeProvider">时间提供者（便于测试）。</param>
     public IpcAuthenticator(IEnumerable<string> allowedSids, string expectedDeviceId, TimeProvider? timeProvider = null)
     {
-        _allowedSids = new HashSet<string>(allowedSids, StringComparer.Ordinal);
+        _allowedSids = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        foreach (var sid in allowedSids) _allowedSids.TryAdd(sid, 0);
         _expectedDeviceId = expectedDeviceId ?? throw new ArgumentNullException(nameof(expectedDeviceId));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _lastCleanupTime = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
@@ -42,7 +43,10 @@ public sealed class IpcAuthenticator : IDisposable
     /// <summary>
     /// 验证消息身份和防重放。
     /// </summary>
-    public Result<IpcMessage> ValidateMessage(IpcMessage message, string? actualDeviceId = null)
+    public Result<IpcMessage> ValidateMessage(
+        IpcMessage message,
+        string? actualDeviceId = null,
+        string? actualSenderSid = null)
     {
         ArgumentNullException.ThrowIfNull(message);
 
@@ -67,9 +71,16 @@ public sealed class IpcAuthenticator : IDisposable
         }
 
         // 4. SenderSid 身份校验
-        if (string.IsNullOrEmpty(message.SenderSid) || !_allowedSids.Contains(message.SenderSid))
+        if (string.IsNullOrEmpty(message.SenderSid) || !_allowedSids.ContainsKey(message.SenderSid))
         {
             return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Sender SID not allowed.");
+        }
+
+        // SenderSid is audit metadata only.  When a server provides the SID obtained
+        // from Named Pipe impersonation it must exactly match the wire value.
+        if (actualSenderSid is not null && !string.Equals(message.SenderSid, actualSenderSid, StringComparison.Ordinal))
+        {
+            return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Sender SID does not match pipe client identity.");
         }
 
         // 5. RequestId 单调递增校验（按 SID 分组）
@@ -114,7 +125,7 @@ public sealed class IpcAuthenticator : IDisposable
     public void AllowSid(string sid)
     {
         ArgumentException.ThrowIfNullOrEmpty(sid);
-        _allowedSids.Add(sid);
+        _allowedSids.TryAdd(sid, 0);
     }
 
     /// <summary>
@@ -123,14 +134,14 @@ public sealed class IpcAuthenticator : IDisposable
     public void RevokeSid(string sid)
     {
         ArgumentException.ThrowIfNullOrEmpty(sid);
-        _allowedSids.Remove(sid);
+        _allowedSids.TryRemove(sid, out _);
         _lastRequestIdPerSid.TryRemove(sid, out _);
     }
 
     /// <summary>
     /// 获取当前允许的 SID 集合快照。
     /// </summary>
-    public IReadOnlyCollection<string> GetAllowedSids() => _allowedSids;
+    public IReadOnlyCollection<string> GetAllowedSids() => _allowedSids.Keys.ToArray();
 
     private void TryCleanupExpiredNonces(long now)
     {

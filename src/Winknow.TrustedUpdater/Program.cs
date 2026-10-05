@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.ServiceProcess;
 using System.Text;
 using System.Text.Json;
+using Winknow.Core;
 using Winknow.Core.Results;
 
 namespace Winknow.TrustedUpdater;
@@ -18,16 +19,12 @@ namespace Winknow.TrustedUpdater;
 /// </summary>
 internal static class Program
 {
-    private static readonly string DeployRoot = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Winknow", "deploy");
-
-    private static readonly string DataDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Winknow");
+    private static readonly ProductPaths Paths = new();
+    private static readonly string DeployRoot = Paths.DeployRoot;
+    private static readonly string DataDir = Paths.Root;
     private const string ProductId = "Winknow.V7";
 
-    private static readonly string[] ManagedServices = ["Winknow Control Service", "Winknow Guard Service"];
+    private static readonly string[] ManagedServices = Constants.Services.Managed;
 
     private static int Main(string[] args)
     {
@@ -38,6 +35,7 @@ internal static class Program
             return args[0].ToLowerInvariant() switch
             {
                 "apply" => RunApply(args[1..]),
+                "snapshot" => RunSnapshot(args[1..]),
                 "rollback" => RunRollback(),
                 "status" => RunStatus(),
                 "sign" => RunSign(args[1..]),
@@ -62,7 +60,7 @@ internal static class Program
 
         var packagePath = args[0];
         var publicKeyPath = GetOption(args, "--publickey")
-            ?? Path.Combine(DeployRoot, "publickey.pem");
+            ?? Paths.PublicKey;
 
         if (!File.Exists(publicKeyPath))
         {
@@ -81,8 +79,8 @@ internal static class Program
             StartServices = StartManagedServices,
             MigrateDatabase = null,
             CheckServiceHealth = CheckServiceHealth,
-            CheckAgentHealth = () => Result.Success(),   // 第 2 周接入
-            CheckPolicyHealth = () => Result.Success()   // 第 4 周接入
+            CheckAgentHealth = CheckAgentHealth,
+            CheckPolicyHealth = CheckPolicyHealth
         });
 
         Console.WriteLine($"应用更新包: {packagePath}");
@@ -108,6 +106,24 @@ internal static class Program
         {
             UpdateModeFlag.Exit(DataDir);
         }
+    }
+
+    private static int RunSnapshot(string[] args)
+    {
+        var source = args.Length == 1 ? args[0] : DeployRoot;
+        if (Directory.Exists(Path.Combine(source, "Current")))
+        {
+            source = Path.Combine(source, "Current");
+        }
+        var vault = new RecoveryVault(DeployRoot);
+        var result = vault.SnapshotFrom(source, Constants.Version);
+        if (!result.IsSuccess)
+        {
+            Console.Error.WriteLine($"[ERROR] {result.ErrorMessage}");
+            return 1;
+        }
+        Console.WriteLine("可信恢复快照已建立");
+        return 0;
     }
 
     private static int RunRollback()
@@ -246,6 +262,37 @@ internal static class Program
         return Result.Success();
     }
 
+    private static Result CheckAgentHealth()
+    {
+        var heartbeatPath = Path.Combine(Paths.Root, "agent_heartbeat.json");
+        if (!File.Exists(heartbeatPath))
+        {
+            return Result.Failure(ErrorCode.PathNotFound, "Agent heartbeat missing");
+        }
+
+        return Result.Success();
+    }
+
+    private static Result CheckPolicyHealth()
+    {
+        if (!File.Exists(Paths.ActivePolicy))
+        {
+            return Result.Failure(ErrorCode.PathNotFound, "Active policy missing");
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(Paths.ActivePolicy));
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                ? Result.Success()
+                : Result.Failure(ErrorCode.InvalidParameter, "Active policy is not a JSON object");
+        }
+        catch (JsonException ex)
+        {
+            return Result.Failure(ErrorCode.InvalidParameter, $"Active policy is invalid: {ex.Message}");
+        }
+    }
+
     private static RSA LoadPublicKey(string path)
     {
         var rsa = RSA.Create();
@@ -273,6 +320,7 @@ internal static class Program
 
             命令:
               apply <package.wku> [--publickey <path>]   应用更新（验签+切换+健康检查+自动回滚）
+              snapshot [deploy-root]                      建立可信恢复快照
               rollback                                   手动回滚到 Previous
               status                                     当前版本与可回滚状态
               sign <manifestDir> <privateKey.pem>        开发辅助：签名 manifest（生产在 HSM）

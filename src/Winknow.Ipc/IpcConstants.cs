@@ -29,6 +29,9 @@ public static class IpcConstants
     /// <summary>心跳消息类型。</summary>
     public const ushort MessageTypeHeartbeat = 0x0001;
 
+    /// <summary>连接和命令的成功确认。</summary>
+    public const ushort MessageTypeAck = 0x0002;
+
     /// <summary>策略下发消息类型。</summary>
     public const ushort MessageTypePolicyUpdate = 0x0010;
 
@@ -46,6 +49,9 @@ public static class IpcConstants
 
     /// <summary>Agent 退出通知。</summary>
     public const ushort MessageTypeAgentExit = 0x0102;
+
+    /// <summary>显示交互会话锁屏遮罩。</summary>
+    public const ushort MessageTypeLockOverlay = 0x03E9;
 
     /// <summary>错误响应。</summary>
     public const ushort MessageTypeError = 0xFFFF;

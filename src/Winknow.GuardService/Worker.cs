@@ -24,7 +24,7 @@ namespace Winknow.GuardService;
 /// </summary>
 internal sealed class Worker : BackgroundService
 {
-    private const string ControlServiceName = "Winknow Control Service";
+    private const string ControlServiceName = Constants.Services.Control;
     private const string ControlServiceExe = "Winknow.ControlService.exe";
 
     private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(Constants.Guard.HeartbeatIntervalSeconds);
@@ -51,9 +51,9 @@ internal sealed class Worker : BackgroundService
     internal Worker(ILogger<Worker> logger)
     {
         _logger = logger;
-        _dataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Winknow");
-        _deployRoot = Path.Combine(_dataDir, "deploy");
+        var paths = new ProductPaths();
+        _dataDir = paths.Root;
+        _deployRoot = paths.DeployRoot;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

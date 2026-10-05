@@ -43,6 +43,17 @@ public sealed class IpcAuthenticatorTests : IDisposable
     }
 
     [Fact]
+    public void ValidateMessage_ClaimedSidDiffersFromPipeIdentity_ShouldReject()
+    {
+        var message = IpcMessage.Create(1, IpcConstants.MessageTypeHeartbeat, Array.Empty<byte>(), AllowedSid);
+
+        var result = _authenticator.ValidateMessage(message, actualSenderSid: AttackerSid);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ErrorCode.Unauthorized, result.ErrorCode);
+    }
+
+    [Fact]
     public void ValidateMessage_EmptySid_ShouldReject()
     {
         var message = IpcMessage.Create(1, IpcConstants.MessageTypeHeartbeat, Array.Empty<byte>(), "");

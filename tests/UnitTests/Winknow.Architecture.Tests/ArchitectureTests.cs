@@ -79,8 +79,8 @@ public sealed class ArchitectureTests
     }
 
     [Theory]
-    [InlineData("Winknow.ControlService", "Winknow Control Service")]
-    [InlineData("Winknow.GuardService", "Winknow Guard Service")]
+    [InlineData("Winknow.ControlService", "Constants.Services.Control")]
+    [InlineData("Winknow.GuardService", "Constants.Services.Guard")]
     public void WindowsServices_ShouldUseAddWindowsService(string projectName, string expectedServiceName)
     {
         var programPath = Path.Combine(RepoRoot, "src", projectName, "Program.cs");

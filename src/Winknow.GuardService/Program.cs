@@ -1,9 +1,10 @@
 using Winknow.GuardService;
+using Winknow.Core;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddWindowsService(options =>
 {
-    options.ServiceName = "Winknow Guard Service";
+    options.ServiceName = Constants.Services.Guard;
 });
 builder.Services.AddHostedService<Worker>();
 
