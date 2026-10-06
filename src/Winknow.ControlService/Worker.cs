@@ -50,6 +50,8 @@ internal sealed class Worker : BackgroundService
     private SingleInstanceGuard? _instanceGuard;
     private HeartbeatLease? _heartbeatLease;
     private ControlCommandHost? _commandHost;
+    private DynamicSidAuthorizer? _sidAuthorizer;
+    private WtsSessionMonitor? _wtsMonitor;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
     {
@@ -231,6 +233,22 @@ internal sealed class Worker : BackgroundService
         _logger?.LogInformation("IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
         _logger?.LogInformation("IPC command registry ready: {Count} methods", _commandHost.Registry.Count);
 
+        // M2-4：学生 SID 动态授权（ADR-002）：登录会话建立→AllowSid(TTL≤8h)，注销→RevokeSid
+        _sidAuthorizer = new DynamicSidAuthorizer(
+            authenticator, WtsSessionMonitor.QuerySessionUserSid,
+            _loggerFactory.CreateLogger<DynamicSidAuthorizer>());
+        _wtsMonitor = new WtsSessionMonitor(
+            _sidAuthorizer.HandleSessionChange, _loggerFactory.CreateLogger<WtsSessionMonitor>());
+        _wtsMonitor.Start();
+        // 服务重启不应孤儿化既有登录会话：恢复授权现存 Active 会话
+        foreach (var (existingSessionId, existingSid) in WtsSessionMonitor.EnumerateActiveSessionsWithSid())
+        {
+            if (existingSid is not null)
+            {
+                _sidAuthorizer.AuthorizeSession(existingSessionId, existingSid);
+            }
+        }
+
         // 4. 启动 WMI 进程实时监听
         _wmiMonitor = new WmiProcessMonitor(_loggerFactory.CreateLogger<WmiProcessMonitor>());
         _wmiMonitor.ProcessStarted += OnProcessStarted;
@@ -347,6 +365,7 @@ internal sealed class Worker : BackgroundService
             _logCipher?.Dispose();
             _checkpointSigner?.Dispose();
             _eventLogAnchor?.Dispose();
+            _wtsMonitor?.Dispose();
             authenticator.Dispose();
 
             if (_ipcServer is not null)

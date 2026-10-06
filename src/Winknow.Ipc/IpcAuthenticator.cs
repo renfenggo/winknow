@@ -19,11 +19,14 @@ public sealed class IpcAuthenticator : IDisposable
 {
     private readonly ConcurrentDictionary<string, long> _nonceCache = new();
     private readonly ConcurrentDictionary<string, uint> _lastRequestIdPerSid = new();
-    private readonly ConcurrentDictionary<string, byte> _allowedSids;
+    private readonly ConcurrentDictionary<string, long> _allowedSids;
     private readonly string _expectedDeviceId;
     private readonly TimeProvider _timeProvider;
     private readonly object _cleanupLock = new();
     private long _lastCleanupTime;
+
+    /// <summary>动态 SID 条目的"永不过期"标记值（静态白名单沿用）。</summary>
+    private const long NoExpiry = 0;
 
     /// <summary>
     /// 创建 IPC 身份验证器。
@@ -33,8 +36,8 @@ public sealed class IpcAuthenticator : IDisposable
     /// <param name="timeProvider">时间提供者（便于测试）。</param>
     public IpcAuthenticator(IEnumerable<string> allowedSids, string expectedDeviceId, TimeProvider? timeProvider = null)
     {
-        _allowedSids = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        foreach (var sid in allowedSids) _allowedSids.TryAdd(sid, 0);
+        _allowedSids = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        foreach (var sid in allowedSids) _allowedSids[sid] = NoExpiry;
         _expectedDeviceId = expectedDeviceId ?? throw new ArgumentNullException(nameof(expectedDeviceId));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _lastCleanupTime = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
@@ -70,10 +73,17 @@ public sealed class IpcAuthenticator : IDisposable
             return Result<IpcMessage>.Failure(ErrorCode.IpcTimeout, "Message timestamp out of tolerance.");
         }
 
-        // 4. SenderSid 身份校验
-        if (string.IsNullOrEmpty(message.SenderSid) || !_allowedSids.ContainsKey(message.SenderSid))
+        // 4. SenderSid 身份校验（动态授权条目过期即移除并显式区分错误码，ADR-002）
+        if (string.IsNullOrEmpty(message.SenderSid) || !_allowedSids.TryGetValue(message.SenderSid, out var sidExpiry))
         {
             return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Sender SID not allowed.");
+        }
+
+        if (sidExpiry != NoExpiry && now >= sidExpiry)
+        {
+            _allowedSids.TryRemove(message.SenderSid, out _);
+            _lastRequestIdPerSid.TryRemove(message.SenderSid, out _);
+            return Result<IpcMessage>.Failure(ErrorCode.IpcSidExpired, "Dynamic SID authorization expired.");
         }
 
         // SenderSid is audit metadata only.  When a server provides the SID obtained
@@ -120,12 +130,28 @@ public sealed class IpcAuthenticator : IDisposable
     }
 
     /// <summary>
-    /// 添加允许的 SID。
+    /// 添加允许的 SID（静态白名单，永不过期）。
     /// </summary>
     public void AllowSid(string sid)
     {
         ArgumentException.ThrowIfNullOrEmpty(sid);
-        _allowedSids.TryAdd(sid, 0);
+        _allowedSids[sid] = NoExpiry;
+    }
+
+    /// <summary>
+    /// 动态授权 SID 并绑定过期时间（ADR-002：登录会话建立时授予，TTL 上限 8 小时）。
+    /// </summary>
+    /// <param name="sid">发送方 SID。</param>
+    /// <param name="ttl">授权有效期（&gt;0，超出上限由调用方截断）。</param>
+    public void AllowSid(string sid, TimeSpan ttl)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sid);
+        if (ttl <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
+        }
+
+        _allowedSids[sid] = _timeProvider.GetUtcNow().Add(ttl).ToUnixTimeMilliseconds();
     }
 
     /// <summary>
@@ -139,9 +165,16 @@ public sealed class IpcAuthenticator : IDisposable
     }
 
     /// <summary>
-    /// 获取当前允许的 SID 集合快照。
+    /// 获取当前允许的 SID 集合快照（不含已过期条目）。
     /// </summary>
-    public IReadOnlyCollection<string> GetAllowedSids() => _allowedSids.Keys.ToArray();
+    public IReadOnlyCollection<string> GetAllowedSids()
+    {
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        return _allowedSids
+            .Where(kvp => kvp.Value == NoExpiry || kvp.Value > now)
+            .Select(kvp => kvp.Key)
+            .ToArray();
+    }
 
     private void TryCleanupExpiredNonces(long now)
     {

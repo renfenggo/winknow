@@ -139,6 +139,8 @@ public enum ErrorCode
     IpcTimeout = 3002,
     /// <summary>An IPC replay was detected.</summary>
     IpcReplayDetected = 3003,
+    /// <summary>A dynamically authorized IPC SID has expired (ADR-002 session TTL).</summary>
+    IpcSidExpired = 3004,
     /// <summary>The database could not be opened.</summary>
     DatabaseOpenFailed = 4001,
     /// <summary>A database write failed.</summary>

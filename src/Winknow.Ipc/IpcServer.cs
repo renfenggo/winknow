@@ -183,9 +183,13 @@ public sealed class IpcServer : IAsyncDisposable
                         _logger?.LogWarning("IPC message rejected: {ErrorCode} {Message}",
                             validation.ErrorCode, validation.ErrorMessage);
 
-                        // 帧级校验失败：JSON 错误信封（契约化 payload），连接保留供诊断与重试
+                        // 帧级校验失败：JSON 错误信封（契约化 payload），连接保留供诊断与重试；
+                        // 动态 SID 过期显式区分 IPC_SID_EXPIRED（ADR-002），其余归入未授权
+                        var frameErrorCode = validation.ErrorCode == Winknow.Core.Results.ErrorCode.IpcSidExpired
+                            ? IpcErrorCodes.IpcSidExpired
+                            : IpcErrorCodes.IpcSidNotAuthorized;
                         await WriteErrorResponseAsync(pipeStream, message.RequestId,
-                            IpcErrorCodes.IpcSidNotAuthorized,
+                            frameErrorCode,
                             $"frame rejected: {validation.ErrorMessage}",
                             closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
                         continue;
