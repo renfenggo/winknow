@@ -139,6 +139,28 @@ public sealed record RunnerResult
 }
 
 /// <summary>
+/// Runner 能力快照（IPC runner.get_capabilities 响应结果）。
+/// 工具链不可用时 available=false 且语言列表为空——调用方据此决定是否下发执行请求。
+/// </summary>
+public sealed record RunnerCapabilities
+{
+    /// <summary>组件名（恒 code_runner）。</summary>
+    public string Component { get; init; } = "code_runner";
+
+    /// <summary>工具链是否可用（g++ 探测成功）。</summary>
+    public bool Available { get; init; }
+
+    /// <summary>编译器完整路径（不可用为 null）。</summary>
+    public string? CompilerPath { get; init; }
+
+    /// <summary>编译器版本描述（不可用为 null）。</summary>
+    public string? CompilerVersion { get; init; }
+
+    /// <summary>支持的语言列表（cpp14/cpp17 子集，按工具链 -std= 能力过滤）。</summary>
+    public IReadOnlyList<RunnerLanguage> Languages { get; init; } = Array.Empty<RunnerLanguage>();
+}
+
+/// <summary>
 /// Runner 契约 JSON 序列化选项（snake_case 字段 + 枚举字符串：
 /// Language → cpp14/cpp17；Status → COMPILED_OK 等大写下划线，与 runner.schema.json 对齐）。
 /// </summary>

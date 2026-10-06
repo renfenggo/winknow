@@ -1,6 +1,8 @@
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Winknow.CodeRunner;
+using Winknow.CodeRunner.Compilation;
 using Winknow.Core;
 using Winknow.Core.Results;
 using Winknow.DeviceSecurity;
@@ -215,6 +217,20 @@ internal sealed class Worker : BackgroundService
             _loggerFactory.CreateLogger<IpcServer>());
         _ipcServer.MessageReceived += OnMessageReceived;
 
+        // M3-5：Runner 执行器注入（runner.get_capabilities / runner.execute 后端）。
+        // 启动期一次探测：工具链缺失不阻断服务启动，runner.* 诚实报告不可用
+        var runnerToolchain = GppToolchain.Discover();
+        var runnerExecutor = new RunnerExecutor(runnerToolchain, paths.RunnerWork);
+        if (runnerExecutor.IsAvailable)
+        {
+            _logger?.LogInformation("CodeRunner toolchain ready: {Path} ({Version})",
+                runnerToolchain!.CompilerPath, runnerToolchain.Version);
+        }
+        else
+        {
+            _logger?.LogWarning("CodeRunner toolchain not found; runner.* methods will report unavailable");
+        }
+
         // M2-3：注册表式 dispatcher（method_registry.md 白名单，system/bridge 角色区分）
         var systemSidValue = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
         var adminsSidValue = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value;
@@ -228,6 +244,7 @@ internal sealed class Worker : BackgroundService
             PolicySnapshot = () => _policy,
             PolicyApplier = policyJson => ApplyPolicy(policyPath, policyJson),
             PolicyRestorer = () => RestorePolicy(policyPath),
+            Runner = runnerExecutor,
         };
         _ipcServer.RequestReceived += OnRequestReceived;
         await _ipcServer.StartAsync();

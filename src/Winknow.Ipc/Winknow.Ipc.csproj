@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Winknow.Ipc.Tests" />
+    <InternalsVisibleTo Include="Winknow.ControlService.Tests" />
   </ItemGroup>
 
 </Project>

@@ -9,7 +9,7 @@ using Winknow.Ipc.Session;
 // 协议：stdin 每行一个请求 JSON，stdout 每行一个响应 JSON；日志只写 stderr。
 var pipeName = IpcConstants.ControlPipeName;
 var deviceId = DeviceId.Generate();
-var capabilities = new[] { "status.read", "device.read", "runner.read" };
+var capabilities = new[] { "status.read", "device.read", "runner.read", "runner.execute" };
 var sessionId = Guid.NewGuid().ToString("N");
 var componentVersion = "0.1.0";
 

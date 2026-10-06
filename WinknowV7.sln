@@ -67,6 +67,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Winknow.CodeRunner", "src\W
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Winknow.CodeRunner.Tests", "tests\UnitTests\Winknow.CodeRunner.Tests\Winknow.CodeRunner.Tests.csproj", "{2A6FEDB7-F1CA-4178-B70B-EFF5DE73EBD9}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Winknow.ControlService.Tests", "tests\UnitTests\Winknow.ControlService.Tests\Winknow.ControlService.Tests.csproj", "{AC24C725-3B3B-4B43-894A-1A094A499FC6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -413,6 +415,18 @@ Global
 		{2A6FEDB7-F1CA-4178-B70B-EFF5DE73EBD9}.Release|x64.Build.0 = Release|Any CPU
 		{2A6FEDB7-F1CA-4178-B70B-EFF5DE73EBD9}.Release|x86.ActiveCfg = Release|Any CPU
 		{2A6FEDB7-F1CA-4178-B70B-EFF5DE73EBD9}.Release|x86.Build.0 = Release|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Debug|x64.Build.0 = Debug|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Debug|x86.Build.0 = Debug|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Release|x64.ActiveCfg = Release|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Release|x64.Build.0 = Release|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Release|x86.ActiveCfg = Release|Any CPU
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -447,5 +461,6 @@ Global
 		{889B120C-9298-4D0C-BAE3-15503A5B3E1A} = {A708931B-568A-4975-BF75-854A434B90EB}
 		{6B8F7BAE-F398-44F4-B8AF-B8D770BFC363} = {A708931B-568A-4975-BF75-854A434B90EB}
 		{2A6FEDB7-F1CA-4178-B70B-EFF5DE73EBD9} = {01E270BD-714B-497A-B32E-44401C07C585}
+		{AC24C725-3B3B-4B43-894A-1A094A499FC6} = {A7DE89CE-CFBA-445B-A4BB-91C227AA09D5}
 	EndGlobalSection
 EndGlobal

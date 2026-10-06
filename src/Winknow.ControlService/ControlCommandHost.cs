@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Winknow.CodeRunner;
 using Winknow.Core.Results;
 using Winknow.Ipc.Commands;
 using Winknow.Ipc.Protocol;
@@ -23,6 +24,7 @@ internal sealed class ControlCommandHost
     private const string PolicyApply = "policy.apply";
     private const string PolicyRestore = "policy.restore";
     private const string RunnerGetCapabilities = "runner.get_capabilities";
+    private const string RunnerExecute = "runner.execute";
 
     private readonly ILogger<ControlCommandHost>? _logger;
     private readonly string _deviceId;
@@ -67,6 +69,9 @@ internal sealed class ControlCommandHost
 
     /// <summary>策略恢复回调（Worker 绑定：从备份恢复并重载）。</summary>
     internal Func<Result<PolicyFile>>? PolicyRestorer { private get; set; }
+
+    /// <summary>Runner 执行器（Worker 绑定；null 时 runner.* 返回 UNAVAILABLE）。</summary>
+    internal RunnerExecutor? Runner { private get; set; }
 
     /// <summary>分发请求（转发到注册表；信封解析失败由调用方处理）。</summary>
     /// <param name="request">请求信封。</param>
@@ -158,7 +163,19 @@ internal sealed class ControlCommandHost
             AllowedRoles = new HashSet<IpcCallerRole> { IpcCallerRole.Bridge, IpcCallerRole.System },
             Timeout = TimeSpan.FromSeconds(5),
             AuditLevel = "meta",
-            Handler = null, // M2 占位，M3 实装（method_registry.md）
+            Handler = GetRunnerCapabilitiesAsync,
+        });
+
+        Registry.Register(new IpcCommandSpec
+        {
+            Method = RunnerExecute,
+            RequiredCapability = "runner.execute",
+            AllowedRoles = new HashSet<IpcCallerRole> { IpcCallerRole.Bridge },
+            // 命令级超时须覆盖契约最坏窗口：编译 ≤30s + 墙钟 ≤60s（method_registry.md
+            // v1 原 60s 默认不覆盖编译窗口，已随 M3-5 实装同步契约为 90s）
+            Timeout = TimeSpan.FromSeconds(90),
+            AuditLevel = "meta",
+            Handler = ExecuteRunnerAsync,
         });
     }
 
@@ -322,6 +339,61 @@ internal sealed class ControlCommandHost
             policy_version = policy.Version,
             restored = true,
         }));
+    }
+
+    private Task<ResponseEnvelope> GetRunnerCapabilitiesAsync(IpcCommandContext context, CancellationToken cancellationToken)
+    {
+        if (Runner is null)
+        {
+            return Task.FromResult(Error(
+                IpcErrorCodes.Unavailable, "runner executor is not bound on this host.", context.Request.TraceId));
+        }
+
+        var capabilities = Runner.GetCapabilities();
+        return Task.FromResult(ResponseEnvelope.FromRawJson(
+            JsonSerializer.Serialize(capabilities, RunnerJson.Options)));
+    }
+
+    private async Task<ResponseEnvelope> ExecuteRunnerAsync(IpcCommandContext context, CancellationToken cancellationToken)
+    {
+        if (Runner is null)
+        {
+            return Error(
+                IpcErrorCodes.Unavailable, "runner executor is not bound on this host.", context.Request.TraceId);
+        }
+
+        if (context.Request.Params is not JsonElement element || element.ValueKind != JsonValueKind.Object)
+        {
+            return Error(
+                IpcErrorCodes.InvalidArgument,
+                "params must be a RunnerRequest JSON object (contracts/runner/runner.schema.json).",
+                context.Request.TraceId);
+        }
+
+        RunnerRequest request;
+        try
+        {
+            request = element.Deserialize<RunnerRequest>(RunnerJson.Options)
+                ?? throw new JsonException("deserialized to null.");
+        }
+        catch (JsonException ex)
+        {
+            return Error(
+                IpcErrorCodes.InvalidArgument,
+                $"params is not a valid RunnerRequest: {ex.Message}",
+                context.Request.TraceId);
+        }
+
+        // 信封 trace_id 回填（请求未自带时）：结果审计可跨层关联
+        if (string.IsNullOrEmpty(request.TraceId) && !string.IsNullOrEmpty(context.Request.TraceId))
+        {
+            request = request with { TraceId = context.Request.TraceId };
+        }
+
+        var result = await Runner.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
+        _logger?.LogInformation("Runner execute: {RequestId} -> {Status} ({ElapsedMs}ms, caller={CallerSid})",
+            result.RequestId, result.Status, result.ElapsedMs, context.Session.CallerSid);
+        return ResponseEnvelope.FromRawJson(JsonSerializer.Serialize(result, RunnerJson.Options));
     }
 
     private static ResponseEnvelope Error(string code, string message, string? traceId) =>
