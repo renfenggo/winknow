@@ -61,6 +61,31 @@ public sealed class WhitelistRuleSet
             });
         }
 
+        // 5. Runner 策略豁免（ADR-003：仅启用时生效——可信工具链路径 +
+        // 工作区编译产物；高风险解释器黑名单不受豁免影响，ProcessJudge
+        // 的黑名单检查在白名单命中之后独立执行）
+        if (sw.RunnerExemptions.Enabled)
+        {
+            foreach (var toolchainPath in sw.RunnerExemptions.TrustedToolchainPaths)
+            {
+                rules.Add(new WhitelistRule
+                {
+                    PathPattern = toolchainPath,
+                    Description = "Runner 工具链豁免（runner_exemptions）"
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(sw.RunnerExemptions.WorkspaceRoot))
+            {
+                rules.Add(new WhitelistRule
+                {
+                    // 归一化尾部反斜杠（C:\x\ + \* 会产生 C:\x\\*）
+                    PathPattern = sw.RunnerExemptions.WorkspaceRoot.TrimEnd('\\') + @"\*",
+                    Description = "Runner 工作区产物豁免（runner_exemptions）"
+                });
+            }
+        }
+
         return new WhitelistRuleSet { PathRules = rules };
     }
 

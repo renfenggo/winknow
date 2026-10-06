@@ -65,6 +65,14 @@
         "regedit.exe",
         "mmc.exe"
       ]
+    },
+    "RunnerExemptions": {
+      "Enabled": true,
+      "TrustedToolchainPaths": [
+        "C:\\Program Files (x86)\\Dev-Cpp\\**"
+      ],
+      "WorkspaceRoot": "C:\\ProgramData\\Winknow\\runner",
+      "MaxSessionMinutes": 120
     }
   },
   "NetworkControl": {

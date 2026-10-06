@@ -34,4 +34,9 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 默认策略文件拷贝到测试输出目录（Load_DefaultPolicy 用例依赖） -->
+    <Content Include="..\..\..\policies\**\*.json" CopyToOutputDirectory="PreserveNewest" LinkBase="policies\" />
+  </ItemGroup>
+
 </Project>

@@ -82,6 +82,9 @@ public sealed class SoftwareControlSection
 
     /// <summary>高风险解释器黑名单。</summary>
     public HighRiskInterpretersSection HighRiskInterpreters { get; init; } = new();
+
+    /// <summary>Runner 策略豁免（M3，ADR-003）。</summary>
+    public RunnerExemptionsSection RunnerExemptions { get; init; } = new();
 }
 
 /// <summary>
@@ -148,6 +151,27 @@ public sealed class HighRiskInterpretersSection
 {
     /// <summary>阻止运行的解释器列表。</summary>
     public List<string> Blocked { get; init; } = new();
+}
+
+/// <summary>
+/// Runner 策略豁免（ADR-003 最小白名单）：仅豁免可信工具链路径与
+/// Runner 工作区编译产物，与全局黑名单正交——powershell/wscript 等
+/// 高风险解释器不因本豁免放开（ProcessJudge 黑名单检查独立于白名单）。
+/// 旧策略文件无本区块时按默认（Enabled=false）兼容。
+/// </summary>
+public sealed class RunnerExemptionsSection
+{
+    /// <summary>是否启用 Runner 豁免（默认关闭）。</summary>
+    public bool Enabled { get; init; } = false;
+
+    /// <summary>可信工具链路径模式列表（g++/cc1plus/as/ld 等，支持通配符）。</summary>
+    public List<string> TrustedToolchainPaths { get; init; } = new();
+
+    /// <summary>Runner 每请求工作区根（编译产物执行豁免区，绝对路径）。</summary>
+    public string WorkspaceRoot { get; init; } = string.Empty;
+
+    /// <summary>豁免最长时限（分钟；0 表示不限，审计字段）。</summary>
+    public int MaxSessionMinutes { get; init; } = 120;
 }
 
 /// <summary>

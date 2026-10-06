@@ -27,6 +27,13 @@ public class PolicyLoaderTests
         Assert.True(result.IsSuccess);
         Assert.Equal("7.0.0", result.Data!.Version);
         Assert.Equal("default-classroom-v1", result.Data!.PolicyId);
+
+        // M3-6：默认策略含 Runner 豁免区块（ADR-003）
+        Assert.True(result.Data!.SoftwareControl.RunnerExemptions.Enabled);
+        Assert.Equal(@"C:\ProgramData\Winknow\runner",
+            result.Data!.SoftwareControl.RunnerExemptions.WorkspaceRoot);
+        Assert.Contains(result.Data!.SoftwareControl.RunnerExemptions.TrustedToolchainPaths,
+            p => p == @"C:\Program Files (x86)\Dev-Cpp\**");
     }
 
     [Fact(DisplayName = "不存在的文件返回 PathNotFound")]
@@ -124,7 +131,13 @@ public class PolicyLoaderTests
                         "ByPath": [{"Path": "C:\\\\Test\\\\app.exe", "Hash": "", "Description": "Test"}],
                         "ByHash": []
                     },
-                    "HighRiskInterpreters": {"Blocked": ["powershell.exe"]}
+                    "HighRiskInterpreters": {"Blocked": ["powershell.exe"]},
+                    "RunnerExemptions": {
+                        "Enabled": true,
+                        "TrustedToolchainPaths": ["C:\\Program Files (x86)\\Dev-Cpp\\**"],
+                        "WorkspaceRoot": "C:\\ProgramData\\Winknow\\runner",
+                        "MaxSessionMinutes": 90
+                    }
                 },
                 "NetworkControl": {
                     "WebsiteWhitelist": {"Domains": ["example.com", "*.example.com"]},
@@ -148,6 +161,42 @@ public class PolicyLoaderTests
             Assert.False(result.Data!.UsbControl.MassStorage.Enabled);
             Assert.True(result.Data!.UsbControl.HidDevices.Enabled);
             Assert.Contains("powershell.exe", result.Data!.SoftwareControl.HighRiskInterpreters.Blocked);
+
+            // M3-6：Runner 豁免区块解析
+            var exemptions = result.Data!.SoftwareControl.RunnerExemptions;
+            Assert.True(exemptions.Enabled);
+            var toolchainPath = Assert.Single(exemptions.TrustedToolchainPaths);
+            Assert.Equal(@"C:\Program Files (x86)\Dev-Cpp\**", toolchainPath);
+            Assert.Equal(@"C:\ProgramData\Winknow\runner", exemptions.WorkspaceRoot);
+            Assert.Equal(90, exemptions.MaxSessionMinutes);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact(DisplayName = "旧策略无 RunnerExemptions 区块默认不启用（兼容）")]
+    public void Load_LegacyPolicyWithoutRunnerExemptions_DefaultsToDisabled()
+    {
+        var tempFile = Path.GetTempFileName();
+        File.WriteAllText(tempFile, """
+            {
+                "Version": "7.0.0",
+                "PolicyId": "test-legacy",
+                "CreatedAt": "2026-01-01T00:00:00Z",
+                "Description": "Legacy policy without runner exemptions"
+            }
+            """);
+
+        try
+        {
+            var result = _loader.Load(tempFile);
+
+            Assert.True(result.IsSuccess);
+            Assert.False(result.Data!.SoftwareControl.RunnerExemptions.Enabled);
+            Assert.Empty(result.Data!.SoftwareControl.RunnerExemptions.TrustedToolchainPaths);
+            Assert.Equal(string.Empty, result.Data!.SoftwareControl.RunnerExemptions.WorkspaceRoot);
         }
         finally
         {
