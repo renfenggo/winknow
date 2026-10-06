@@ -2,6 +2,8 @@ using Microsoft.Extensions.Logging;
 using Winknow.Core;
 using Winknow.DeviceSecurity;
 using Winknow.Ipc;
+using Winknow.Ipc.Protocol;
+using Winknow.Ipc.Session;
 using Winknow.Logging;
 using Winknow.Network;
 using Winknow.Policy;
@@ -186,11 +188,24 @@ internal sealed class Worker : BackgroundService
             highRisk);
         _terminator = new ProcessTerminator(_loggerFactory.CreateLogger<ProcessTerminator>());
 
-        // 3. 启动 IPC 服务端
+        // 3. 启动 IPC 服务端（M2：连接期握手 + 能力协商，ADR-001）
         var authenticator = IpcAuthenticator.CreateForControlService(deviceId);
+        var serverDescriptor = new IpcServerDescriptor
+        {
+            Protocol = ProtocolVersion.Current,
+            ComponentVersion = Constants.Version,
+            SupportedCapabilities = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "status.read", "device.read", "classroom.control", "policy.control",
+                "runner.read", "system.control",
+            },
+            DeviceId = deviceId,
+            SessionTtlSeconds = 28800,
+        };
         _ipcServer = new IpcServer(
             IpcConstants.ControlPipeName,
             authenticator,
+            new IpcHandshakeValidator(serverDescriptor),
             _loggerFactory.CreateLogger<IpcServer>());
         _ipcServer.MessageReceived += OnMessageReceived;
         await _ipcServer.StartAsync();
