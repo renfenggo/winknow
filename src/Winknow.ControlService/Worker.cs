@@ -222,7 +222,8 @@ internal sealed class Worker : BackgroundService
             _loggerFactory.CreateLogger<ControlCommandHost>(),
             deviceId,
             Constants.Version,
-            sid => sid == systemSidValue || sid == adminsSidValue)
+            sid => sid == systemSidValue || sid == adminsSidValue,
+            new IpcAuditSink(_loggerFactory.CreateLogger<IpcAuditSink>(), _eventLogAnchor))
         {
             PolicySnapshot = () => _policy,
             PolicyApplier = policyJson => ApplyPolicy(policyPath, policyJson),
@@ -495,7 +496,7 @@ internal sealed class Worker : BackgroundService
                 IpcErrorCodes.InvalidArgument, "malformed request payload."));
         }
 
-        return await _commandHost.DispatchAsync(request, context.Session, cancellationToken);
+        return await _commandHost.DispatchAsync(request, context.Session, cancellationToken, context.Message.RequestId);
     }
 
     /// <summary>

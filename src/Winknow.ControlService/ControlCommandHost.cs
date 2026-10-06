@@ -40,17 +40,19 @@ internal sealed class ControlCommandHost
     /// <param name="deviceId">本机设备 ID。</param>
     /// <param name="componentVersion">ControlService 组件版本。</param>
     /// <param name="isSystemSid">系统 SID（LocalSystem/Administrators）判定谓词。</param>
+    /// <param name="auditSink">IPC 审计输出端（M2-5；null 表示不落审计）。</param>
     public ControlCommandHost(
         ILogger<ControlCommandHost>? logger,
         string deviceId,
         string componentVersion,
-        Func<string, bool> isSystemSid)
+        Func<string, bool> isSystemSid,
+        IIpcAuditSink? auditSink = null)
     {
         _logger = logger;
         _deviceId = deviceId;
         _componentVersion = componentVersion;
 
-        Registry = new IpcCommandRegistry(isSystemSid);
+        Registry = new IpcCommandRegistry(isSystemSid, auditSink);
         RegisterAll();
     }
 
@@ -70,10 +72,12 @@ internal sealed class ControlCommandHost
     /// <param name="request">请求信封。</param>
     /// <param name="session">连接会话。</param>
     /// <param name="cancellationToken">取消令牌。</param>
+    /// <param name="requestId">帧级请求号（透传至审计记录）。</param>
     /// <returns>响应信封。</returns>
     public Task<ResponseEnvelope> DispatchAsync(
-        RequestEnvelope request, IpcConnectionSession session, CancellationToken cancellationToken) =>
-        Registry.DispatchAsync(request, session, cancellationToken);
+        RequestEnvelope request, IpcConnectionSession session, CancellationToken cancellationToken,
+        uint requestId = 0) =>
+        Registry.DispatchAsync(request, session, cancellationToken, requestId);
 
     private void RegisterAll()
     {

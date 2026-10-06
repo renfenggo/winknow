@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Winknow.Ipc.Protocol;
 using Winknow.Ipc.Session;
 
@@ -84,12 +85,15 @@ public sealed class IpcCommandRegistry
 {
     private readonly Dictionary<string, IpcCommandSpec> _methods = new(StringComparer.Ordinal);
     private readonly Func<string, bool>? _isSystemSid;
+    private readonly IIpcAuditSink? _auditSink;
 
     /// <summary>创建命令注册表。</summary>
     /// <param name="isSystemSid">系统 SID 判定谓词（LocalSystem/Administrators 静态身份，非动态白名单）。</param>
-    public IpcCommandRegistry(Func<string, bool>? isSystemSid = null)
+    /// <param name="auditSink">审计输出端（null 表示不落审计；仅测试/诊断场景）。</param>
+    public IpcCommandRegistry(Func<string, bool>? isSystemSid = null, IIpcAuditSink? auditSink = null)
     {
         _isSystemSid = isSystemSid;
+        _auditSink = auditSink;
     }
 
     /// <summary>已注册方法数。</summary>
@@ -150,17 +154,31 @@ public sealed class IpcCommandRegistry
         return IpcCallerRole.Unknown;
     }
 
-    /// <summary>按白名单分发请求（校验顺序见类注释；绝不抛出，失败返回错误信封）。</summary>
+    /// <summary>
+    /// 按白名单分发请求（校验顺序见类注释；绝不抛出，失败返回错误信封），
+    /// 并对每次调用（成功或拒绝）写一条审计记录（指导书 04 第 6 节）。
+    /// </summary>
     /// <param name="request">请求信封。</param>
     /// <param name="session">连接会话。</param>
     /// <param name="cancellationToken">连接级取消令牌。</param>
+    /// <param name="requestId">帧级请求号（IpcMessage.RequestId；0 表示未知来源）。</param>
     /// <returns>响应信封。</returns>
     public async Task<ResponseEnvelope> DispatchAsync(
-        RequestEnvelope request, IpcConnectionSession session, CancellationToken cancellationToken)
+        RequestEnvelope request, IpcConnectionSession session, CancellationToken cancellationToken,
+        uint requestId = 0)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(session);
 
+        long startTimestamp = Stopwatch.GetTimestamp();
+        var response = await DispatchCoreAsync(request, session, cancellationToken).ConfigureAwait(false);
+        WriteAudit(request, session, requestId, response, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
+        return response;
+    }
+
+    private async Task<ResponseEnvelope> DispatchCoreAsync(
+        RequestEnvelope request, IpcConnectionSession session, CancellationToken cancellationToken)
+    {
         if (string.IsNullOrEmpty(request.Method) || !RequestEnvelope.IsValidMethodName(request.Method)
             || !_methods.TryGetValue(request.Method, out var spec))
         {
@@ -245,6 +263,57 @@ public sealed class IpcCommandRegistry
                 IpcErrorCodes.InternalError,
                 $"'{spec.Method}' handler failed.",
                 request.TraceId);
+        }
+    }
+
+    /// <summary>
+    /// 写审计记录（M2-5）：结果码取响应错误码（成功为 OK）；
+    /// denied_reason 取错误 details.denied_reason；审计级——未知方法或携带
+    /// denied_reason 的拒绝为 "denied"，其余（成功、handler 业务错误）取 spec.AuditLevel。
+    /// sink 异常一律吞掉：审计绝不阻断分发。
+    /// </summary>
+    private void WriteAudit(
+        RequestEnvelope request, IpcConnectionSession session, uint requestId,
+        ResponseEnvelope response, double latencyMs)
+    {
+        if (_auditSink is null)
+        {
+            return;
+        }
+
+        try
+        {
+            string? deniedReason = null;
+            if (!response.Ok && response.Error?.Details is { } details
+                && details.TryGetValue("denied_reason", out var reason) && reason is not null)
+            {
+                deniedReason = reason.ToString();
+            }
+
+            IpcCommandSpec? spec = null;
+            var registered = !string.IsNullOrEmpty(request.Method) && _methods.TryGetValue(request.Method, out spec);
+            var auditLevel = !registered || (!response.Ok && deniedReason is not null)
+                ? "denied"
+                : spec!.AuditLevel;
+
+            _auditSink.Write(new IpcAuditRecord
+            {
+                Timestamp = DateTimeOffset.UtcNow,
+                TraceId = request.TraceId,
+                RequestId = requestId,
+                Method = request.Method ?? string.Empty,
+                CallerSid = session.CallerSid,
+                Role = ResolveRole(session),
+                Ok = response.Ok,
+                ResultCode = response.Ok ? "OK" : (response.Error?.Code ?? IpcErrorCodes.InternalError),
+                LatencyMs = Math.Max(0, (long)latencyMs),
+                DeniedReason = deniedReason,
+                AuditLevel = auditLevel,
+            });
+        }
+        catch
+        {
+            // 审计写入失败不得影响命令分发
         }
     }
 
