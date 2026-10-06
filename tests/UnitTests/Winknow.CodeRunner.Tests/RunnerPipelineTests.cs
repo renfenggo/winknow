@@ -7,7 +7,9 @@ namespace Winknow.CodeRunner.Tests;
 /// 编译链管线集成测试（真实 g++ 编译运行；本机未装 g++ 时用例静默通过）。
 /// 覆盖指导书 05 编译链：hello world、stdin、编译诊断、墙钟超时、输出截断、
 /// 内存炸弹、工作区清理、校验拒绝。
+/// 与其它启动 program.exe 的测试类同 Collection 串行（残留进程断言防误报）。
 /// </summary>
+[Collection("code-runner-pipeline")]
 public sealed class RunnerPipelineTests
 {
     private static readonly Lazy<GppToolchain?> Toolchain = new(GppToolchain.Discover);

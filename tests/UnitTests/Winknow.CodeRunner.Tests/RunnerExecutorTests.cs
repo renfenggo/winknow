@@ -8,7 +8,9 @@ namespace Winknow.CodeRunner.Tests;
 /// M3-5 RunnerExecutor 门面测试：能力快照（无工具链/有工具链）、
 /// 串行执行、工具链缺失降级 INTERNAL_ERROR、契约序列化（snake_case）。
 /// 本机无 g++ 时真实执行用例静默通过（环境自适应）。
+/// 与其它启动 program.exe 的测试类同 Collection 串行（残留进程断言防误报）。
 /// </summary>
+[Collection("code-runner-pipeline")]
 public sealed class RunnerExecutorTests
 {
     private static readonly Lazy<GppToolchain?> Toolchain = new(GppToolchain.Discover);
