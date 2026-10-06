@@ -35,6 +35,8 @@ public sealed class ProductPaths
     public string Logs => Path.Combine(Root, "logs");
     /// <summary>Device-secret directory.</summary>
     public string Keys => Path.Combine(Root, "keys");
+    /// <summary>CodeRunner per-request workspace root (M3, ADR-003).</summary>
+    public string RunnerWork => Path.Combine(Root, "runner");
     /// <summary>Update-signature verification public key.</summary>
     public string PublicKey => Path.Combine(DeployRoot, "publickey.pem");
 
