@@ -1,177 +1,174 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
+using System.Security.Principal;
 using System.Text;
-using Microsoft.Extensions.Logging;
-using Winknow.Core;
-using Winknow.Core.Results;
+using System.Text.Json;
+using Winknow.Ipc.Protocol;
+using Winknow.Ipc.Session;
 
 namespace Winknow.Ipc;
 
 /// <summary>
-/// Named Pipe 客户端。
-/// 用于 SessionAgent / AdminUI 连接 ControlService。
+/// Named Pipe 客户端（DesktopBridge / 测试客户端侧，镜像 IpcServer 帧格式）：
+/// 4 字节小端长度前缀 + IpcMessage 二进制帧，payload 为契约 JSON。
+///
+/// 连接后首帧必须是 ipc.handshake（ADR-001）；业务请求经 InvokeAsync 收发
+/// RequestEnvelope / ResponseEnvelope。单连接串行复用（SemaphoreSlim）；
+/// RequestId 以当前毫秒时间戳为种子单调递增，避免客户端重启后与服务端
+/// 按 SID 维度的 RequestId 单调性检查（防重放）冲突。
 /// </summary>
 public sealed class IpcClient : IAsyncDisposable
 {
     private readonly string _pipeName;
-    private readonly string _serverName;
-    private readonly string _senderSid;
-    private readonly ILogger<IpcClient>? _logger;
+    private readonly SemaphoreSlim _ioLock = new(1, 1);
     private NamedPipeClientStream? _stream;
-    private uint _nextRequestId = 1;
-    private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private uint _lastRequestId = (uint)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    /// <summary>接收到服务端消息时触发。</summary>
-    public event Func<IpcMessage, CancellationToken, Task>? MessageReceived;
-
-    /// <summary>
-    /// 创建 IPC 客户端。
-    /// </summary>
-    /// <param name="pipeName">Pipe 名称。</param>
-    /// <param name="senderSid">发送方 SID（用于消息身份）。</param>
-    /// <param name="serverName">服务器名（默认本机）。</param>
-    /// <param name="logger">可选的日志记录器。</param>
-    public IpcClient(string pipeName, string senderSid, string? serverName = null, ILogger<IpcClient>? logger = null)
+    /// <summary>创建管道客户端。</summary>
+    /// <param name="pipeName">目标管道名（默认 Winknow_Control）。</param>
+    public IpcClient(string pipeName = IpcConstants.ControlPipeName)
     {
         ArgumentException.ThrowIfNullOrEmpty(pipeName);
-        ArgumentException.ThrowIfNullOrEmpty(senderSid);
-
         _pipeName = pipeName;
-        _senderSid = senderSid;
-        _serverName = serverName ?? ".";
-        _logger = logger;
     }
 
-    /// <summary>
-    /// 连接到服务端。
-    /// </summary>
-    public async Task<Result<object>> ConnectAsync(CancellationToken cancellationToken = default)
+    /// <summary>是否处于已连接状态。</summary>
+    public bool IsConnected => _stream is { IsConnected: true };
+
+    /// <summary>连接服务端管道（本机）。</summary>
+    /// <param name="timeoutMs">连接超时（毫秒）。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    public async Task ConnectAsync(int timeoutMs = IpcConstants.ConnectionTimeoutMs, CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
+        await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _stream = new NamedPipeClientStream(
-                _serverName,
-                _pipeName,
-                PipeDirection.InOut,
-                PipeOptions.Asynchronous);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(IpcConstants.ConnectionTimeoutMs);
-
-            await _stream.ConnectAsync(cts.Token).ConfigureAwait(false);
-            _logger?.LogInformation("Connected to IPC server {Server}/{Pipe}", _serverName, _pipeName);
-
-            // 启动接收循环
-            _ = ReceiveLoopAsync(cancellationToken);
-            return Result<object>.Success(new object());
-        }
-        catch (OperationCanceledException)
-        {
-            return Result<object>.Failure(ErrorCode.IpcTimeout, "IPC connection timed out.");
-        }
-        catch (Exception ex)
-        {
-            return Result<object>.Failure(ErrorCode.IpcConnectionFailed, ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// 发送消息。
-    /// </summary>
-    public async Task<Result<object>> SendAsync(ushort messageType, byte[] payload, CancellationToken cancellationToken = default)
-    {
-        if (_stream is null || !_stream.IsConnected)
-        {
-            return Result<object>.Failure(ErrorCode.IpcConnectionFailed, "Not connected to IPC server.");
-        }
-
-        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var message = IpcMessage.Create(
-                requestId: _nextRequestId++,
-                messageType: messageType,
-                payload: payload,
-                senderSid: _senderSid);
-
-            var bytes = message.ToBytes();
-            var lengthPrefix = new byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(lengthPrefix, (uint)bytes.Length);
-
-            await _stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
-            await _stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            await _stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-
-            return Result<object>.Success(new object());
-        }
-        catch (Exception ex)
-        {
-            return Result<object>.Failure(ErrorCode.IpcConnectionFailed, ex.Message);
+            // Impersonation 级别是服务端 GetClientSid(RunAsClient) 判定调用方 SID 的前提；
+            // 仅本机模拟（非 Delegation），与 IpcServer 的 SID 绑定安全模型一致。
+            var stream = new NamedPipeClientStream(
+                serverName: ".",
+                pipeName: _pipeName,
+                direction: PipeDirection.InOut,
+                options: PipeOptions.Asynchronous,
+                impersonationLevel: TokenImpersonationLevel.Impersonation);
+            await stream.ConnectAsync(timeoutMs, cancellationToken).ConfigureAwait(false);
+            _stream?.Dispose();
+            _stream = stream;
         }
         finally
         {
-            _sendLock.Release();
+            _ioLock.Release();
         }
     }
 
     /// <summary>
-    /// 发送心跳消息。
+    /// 发送连接期握手并返回响应信封（ok=false 表示被拒：
+    /// 版本不兼容 / 设备不匹配 / 身份不一致等，见 IpcHandshakeValidator）。
     /// </summary>
-    public Task<Result<object>> SendHeartbeatAsync(CancellationToken cancellationToken = default)
+    /// <param name="handshake">握手参数。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    public async Task<ResponseEnvelope> HandshakeAsync(HandshakeParams handshake, CancellationToken cancellationToken = default)
     {
-        return SendAsync(IpcConstants.MessageTypeHeartbeat, Array.Empty<byte>(), cancellationToken);
+        ArgumentNullException.ThrowIfNull(handshake);
+
+        var request = new RequestEnvelope
+        {
+            Method = HandshakeParams.MethodName,
+            Params = JsonSerializer.SerializeToElement(handshake, Protocol.Json.Options),
+        };
+
+        return await SendAndReceiveAsync(
+            IpcConstants.MessageTypeHandshake, request.Serialize(), cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// 发送业务请求并等待响应。请求级超时（IpcConstants.RequestTimeoutMs）返回
+    /// TIMEOUT 错误信封；连接中断抛出 IOException，由调用方决定重连。
+    /// </summary>
+    /// <param name="request">请求信封。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    public async Task<ResponseEnvelope> InvokeAsync(RequestEnvelope request, CancellationToken cancellationToken = default)
     {
-        if (_stream is null)
-        {
-            return;
-        }
+        ArgumentNullException.ThrowIfNull(request);
 
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(IpcConstants.RequestTimeoutMs);
         try
         {
-            while (_stream.IsConnected && !cancellationToken.IsCancellationRequested)
-            {
-                var lengthBuffer = new byte[4];
-                var bytesRead = await ReadExactAsync(_stream, lengthBuffer, 4, cancellationToken).ConfigureAwait(false);
-                if (bytesRead < 4)
-                {
-                    break;
-                }
-
-                var messageLength = BinaryPrimitives.ReadUInt32LittleEndian(lengthBuffer);
-                if (messageLength == 0 || messageLength > IpcConstants.MaxMessageLength)
-                {
-                    _logger?.LogWarning("Invalid message length: {Length}", messageLength);
-                    break;
-                }
-
-                var messageBuffer = new byte[messageLength];
-                bytesRead = await ReadExactAsync(_stream, messageBuffer, (int)messageLength, cancellationToken).ConfigureAwait(false);
-                if (bytesRead < messageLength)
-                {
-                    break;
-                }
-
-                var message = IpcMessage.FromBytes(messageBuffer);
-                if (MessageReceived is not null)
-                {
-                    await MessageReceived.Invoke(message, cancellationToken).ConfigureAwait(false);
-                }
-            }
+            return await SendAndReceiveAsync(
+                IpcConstants.MessageTypeRequest, request.Serialize(), timeoutCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            // 正常关闭
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "IPC client receive loop error.");
+            return ResponseEnvelope.FromError(ErrorEnvelope.Create(
+                IpcErrorCodes.Timeout, "request timed out at client.", request.TraceId));
         }
     }
 
-    private static async Task<int> ReadExactAsync(Stream stream, byte[] buffer, int count, CancellationToken cancellationToken)
+    private async Task<ResponseEnvelope> SendAndReceiveAsync(ushort messageType, string payloadJson, CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+
+        var stream = _stream;
+        if (stream is not { IsConnected: true })
+        {
+            throw new IOException("IPC client is not connected.");
+        }
+
+        var requestId = Interlocked.Increment(ref _lastRequestId);
+        var frame = IpcMessage.Create(
+            requestId: requestId,
+            messageType: messageType,
+            payload: Encoding.UTF8.GetBytes(payloadJson));
+
+        await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var bytes = frame.ToBytes();
+            var lengthPrefix = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(lengthPrefix, (uint)bytes.Length);
+            await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+            var responseFrame = await ReadFrameAsync(stream, cancellationToken).ConfigureAwait(false);
+            if (responseFrame.MessageType != IpcConstants.MessageTypeResponse)
+            {
+                throw new IOException($"unexpected frame type 0x{responseFrame.MessageType:X4} from server.");
+            }
+
+            if (responseFrame.RequestId != requestId)
+            {
+                throw new IOException("response request id does not match the request.");
+            }
+
+            var response = ResponseEnvelope.Deserialize(Encoding.UTF8.GetString(responseFrame.Payload));
+            return response ?? throw new IOException("server response payload is not a valid envelope.");
+        }
+        finally
+        {
+            _ioLock.Release();
+        }
+    }
+
+    private static async Task<IpcMessage> ReadFrameAsync(NamedPipeClientStream stream, CancellationToken cancellationToken)
+    {
+        var lengthBuffer = new byte[4];
+        await ReadExactAsync(stream, lengthBuffer, 4, cancellationToken).ConfigureAwait(false);
+
+        var length = BinaryPrimitives.ReadUInt32LittleEndian(lengthBuffer);
+        if (length == 0 || length > IpcConstants.MaxMessageLength)
+        {
+            throw new IOException("server frame length out of bounds.");
+        }
+
+        var body = new byte[length];
+        await ReadExactAsync(stream, body, (int)length, cancellationToken).ConfigureAwait(false);
+        return IpcMessage.FromBytes(body);
+    }
+
+    private static async Task ReadExactAsync(Stream stream, byte[] buffer, int count, CancellationToken cancellationToken)
     {
         var totalRead = 0;
         while (totalRead < count)
@@ -180,20 +177,31 @@ public sealed class IpcClient : IAsyncDisposable
                 .ConfigureAwait(false);
             if (read == 0)
             {
-                break;
+                throw new IOException("connection closed by server.");
             }
+
             totalRead += read;
         }
-        return totalRead;
     }
 
-    /// <inheritdoc/>
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+    }
+
+    private bool _disposed;
+
+    /// <summary>关闭连接并释放资源。</summary>
     public async ValueTask DisposeAsync()
     {
-        _sendLock.Dispose();
-        if (_stream is not null)
+        if (_disposed)
         {
-            await _stream.DisposeAsync().ConfigureAwait(false);
+            return;
         }
+
+        _disposed = true;
+        _stream?.Dispose();
+        _stream = null;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 }

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>Winknow.DesktopBridge</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Winknow.Core\Winknow.Core.csproj" />
+    <ProjectReference Include="..\Winknow.Ipc\Winknow.Ipc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Winknow.Ipc.Tests" />
+  </ItemGroup>
+
+</Project>

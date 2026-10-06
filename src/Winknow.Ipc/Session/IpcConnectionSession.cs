@@ -21,4 +21,7 @@ public sealed class IpcConnectionSession
 
     /// <summary>组件类型（bridge/admin_tool/test_client/session_agent）。</summary>
     public string Component { get; internal set; } = string.Empty;
+
+    /// <summary>本连接内已见到的最大 RequestId（连接级防乱序回退，跨连接重放由 Nonce 查重承担）。</summary>
+    public uint? LastSeenRequestId { get; internal set; }
 }

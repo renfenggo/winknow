@@ -10,15 +10,17 @@ namespace Winknow.Ipc;
 ///
 /// 校验规则（见《V7.0 组件架构设计》第 6.3 节）：
 /// 1. 时间戳偏差超过 ±60 秒 → 拒绝（防篡改时间）
-/// 2. RequestId 必须大于上次收到的值（防重放）
-/// 3. Nonce 在 5 分钟内不得重复（防重放）
-/// 4. SenderSid 必须属于允许的 SID 集合（身份验证）
-/// 5. DeviceId 必须与本机匹配（设备绑定）
+/// 2. Nonce 在 5 分钟内不得重复（防重放，跨连接全局查重）
+/// 3. SenderSid 必须属于允许的 SID 集合（身份验证）
+/// 4. DeviceId 必须与本机匹配（设备绑定）
+///
+/// RequestId 单调递增检查按连接在 IpcServer 会话层执行：同一 SID 的多个客户端
+/// （ADR-002：Bridge 与 SessionAgent 并存）各自维护独立 RequestId 时钟，跨连接的
+/// 全局单调无法成立；跨连接重放防护由本类的 Nonce 全局查重承担。
 /// </summary>
 public sealed class IpcAuthenticator : IDisposable
 {
     private readonly ConcurrentDictionary<string, long> _nonceCache = new();
-    private readonly ConcurrentDictionary<string, uint> _lastRequestIdPerSid = new();
     private readonly ConcurrentDictionary<string, long> _allowedSids;
     private readonly string _expectedDeviceId;
     private readonly TimeProvider _timeProvider;
@@ -82,7 +84,6 @@ public sealed class IpcAuthenticator : IDisposable
         if (sidExpiry != NoExpiry && now >= sidExpiry)
         {
             _allowedSids.TryRemove(message.SenderSid, out _);
-            _lastRequestIdPerSid.TryRemove(message.SenderSid, out _);
             return Result<IpcMessage>.Failure(ErrorCode.IpcSidExpired, "Dynamic SID authorization expired.");
         }
 
@@ -93,16 +94,7 @@ public sealed class IpcAuthenticator : IDisposable
             return Result<IpcMessage>.Failure(ErrorCode.Unauthorized, "Sender SID does not match pipe client identity.");
         }
 
-        // 5. RequestId 单调递增校验（按 SID 分组）
-        if (_lastRequestIdPerSid.TryGetValue(message.SenderSid, out var lastRequestId))
-        {
-            if (message.RequestId <= lastRequestId)
-            {
-                return Result<IpcMessage>.Failure(ErrorCode.IpcReplayDetected, "RequestId not monotonically increasing.");
-            }
-        }
-
-        // 6. Nonce 重复校验（5 分钟内不得重复）
+        // 5. Nonce 重复校验（5 分钟内不得重复）
         var nonceKey = Convert.ToHexString(message.Nonce);
         var nonceExpiration = message.Timestamp + IpcConstants.NonceCacheTtlMs;
         if (_nonceCache.TryGetValue(nonceKey, out var existingExpiration))
@@ -121,9 +113,8 @@ public sealed class IpcAuthenticator : IDisposable
 
         // 校验通过，更新缓存
         _nonceCache[nonceKey] = nonceExpiration;
-        _lastRequestIdPerSid[message.SenderSid] = message.RequestId;
 
-        // 8. 定期清理过期 Nonce
+        // 6. 定期清理过期 Nonce
         TryCleanupExpiredNonces(now);
 
         return Result<IpcMessage>.Success(message);
@@ -161,7 +152,6 @@ public sealed class IpcAuthenticator : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(sid);
         _allowedSids.TryRemove(sid, out _);
-        _lastRequestIdPerSid.TryRemove(sid, out _);
     }
 
     /// <summary>
@@ -207,7 +197,6 @@ public sealed class IpcAuthenticator : IDisposable
     public void Dispose()
     {
         _nonceCache.Clear();
-        _lastRequestIdPerSid.Clear();
     }
 
     /// <summary>

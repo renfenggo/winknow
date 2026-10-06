@@ -10,7 +10,7 @@ namespace Winknow.Ipc.Tests;
 /// 验收项：
 /// - 普通学生自写程序不能发送管理命令（SID 校验）
 /// - IPC 非法消息不导致服务崩溃（异常处理）
-/// - 防重放（时间戳/RequestId/Nonce）
+/// - 防重放（时间戳/Nonce）；RequestId 连接级单调见 IpcClientIntegrationTests
 /// </summary>
 public sealed class IpcAuthenticatorTests : IDisposable
 {
@@ -61,32 +61,6 @@ public sealed class IpcAuthenticatorTests : IDisposable
         var result = _authenticator.ValidateMessage(message);
         Assert.False(result.IsSuccess);
         Assert.Equal(ErrorCode.Unauthorized, result.ErrorCode);
-    }
-
-    [Fact]
-    public void ValidateMessage_ReplayedRequestId_ShouldReject()
-    {
-        var msg1 = IpcMessage.Create(100, IpcConstants.MessageTypeHeartbeat, Array.Empty<byte>(), AllowedSid);
-        var result1 = _authenticator.ValidateMessage(msg1);
-        Assert.True(result1.IsSuccess);
-
-        // 重放：RequestId 相同
-        var msg2 = IpcMessage.Create(100, IpcConstants.MessageTypeHeartbeat, Array.Empty<byte>(), AllowedSid);
-        var result2 = _authenticator.ValidateMessage(msg2);
-        Assert.False(result2.IsSuccess);
-        Assert.Equal(ErrorCode.IpcReplayDetected, result2.ErrorCode);
-    }
-
-    [Fact]
-    public void ValidateMessage_LowerRequestId_ShouldReject()
-    {
-        var msg1 = IpcMessage.Create(200, IpcConstants.MessageTypeHeartbeat, Array.Empty<byte>(), AllowedSid);
-        _authenticator.ValidateMessage(msg1);
-
-        var msg2 = IpcMessage.Create(199, IpcConstants.MessageTypeHeartbeat, Array.Empty<byte>(), AllowedSid);
-        var result2 = _authenticator.ValidateMessage(msg2);
-        Assert.False(result2.IsSuccess);
-        Assert.Equal(ErrorCode.IpcReplayDetected, result2.ErrorCode);
     }
 
     [Fact]

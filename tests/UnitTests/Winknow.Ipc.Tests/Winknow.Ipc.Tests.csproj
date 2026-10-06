@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Winknow.Ipc\Winknow.Ipc.csproj" />
+    <ProjectReference Include="..\..\..\src\Winknow.DesktopBridge\Winknow.DesktopBridge.csproj" />
   </ItemGroup>
 
   <ItemGroup>

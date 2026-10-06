@@ -9,7 +9,8 @@ public sealed record HandshakeOutcome(
     ResponseEnvelope Response,
     bool CloseConnection,
     IReadOnlySet<string> GrantedCapabilities,
-    string SessionId)
+    string SessionId,
+    string Component)
 {
     /// <summary>构造拒绝结果。</summary>
     public static HandshakeOutcome Reject(string code, string message, bool closeConnection,
@@ -18,7 +19,8 @@ public sealed record HandshakeOutcome(
         Response: ResponseEnvelope.FromError(ErrorEnvelope.Create(code, message, details: details)),
         CloseConnection: closeConnection,
         GrantedCapabilities: new HashSet<string>(),
-        SessionId: string.Empty);
+        SessionId: string.Empty,
+        Component: string.Empty);
 }
 
 /// <summary>
@@ -156,7 +158,8 @@ public sealed class IpcHandshakeValidator
             Response: ResponseEnvelope.FromResult(result),
             CloseConnection: false,
             GrantedCapabilities: granted,
-            SessionId: handshake.SessionId);
+            SessionId: handshake.SessionId,
+            Component: handshake.Component);
     }
 
     private HandshakeOutcome RejectInvalid(string reason) => HandshakeOutcome.Reject(

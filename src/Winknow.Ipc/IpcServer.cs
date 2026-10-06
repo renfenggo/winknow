@@ -94,7 +94,27 @@ public sealed class IpcServer : IAsyncDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var pipeStream = CreateSecurePipeStream();
+            NamedPipeServerStream pipeStream;
+            try
+            {
+                pipeStream = CreateSecurePipeStream();
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                // 创建后续实例失败不应让监听任务整体崩溃（原异常在 try 外传播，
+                // 只会在 StopAsync 时上浮，极难定位）：记日志、短暂退避后重试
+                _logger?.LogError(ex, "IPC server failed to create a pipe instance for {PipeName}; retrying.", _pipeName);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                continue;
+            }
 
             try
             {
@@ -105,6 +125,7 @@ public sealed class IpcServer : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
+                pipeStream.Dispose();
                 break;
             }
             catch (Exception ex)
@@ -138,6 +159,21 @@ public sealed class IpcServer : IAsyncDisposable
             usersIdentity,
             PipeAccessRights.ReadWrite,
             AccessControlType.Allow));
+
+        // 创建后续实例需要对既有管道对象持有 CreatePipeInstance 权限：SYSTEM/Administrators
+        // 规则已覆盖生产服务身份。若以其他本地身份运行（开发/测试环境下的普通用户，
+        // UAC 非提升令牌中 Administrators SID 仅 deny-only），BuiltinUsers 的 ReadWrite 不含
+        // CreatePipeInstance，首个客户端接入后监听循环创建第二实例将被 ACCESS DENIED，
+        // 因此对非 SYSTEM 的当前运行身份授予完全控制。
+        using var currentIdentity = WindowsIdentity.GetCurrent();
+        var currentSid = currentIdentity.User;
+        if (currentSid is not null && !currentSid.Equals(systemIdentity))
+        {
+            security.AddAccessRule(new PipeAccessRule(
+                currentSid,
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow));
+        }
 
         return NamedPipeServerStreamAcl.Create(
             _pipeName,
@@ -195,6 +231,19 @@ public sealed class IpcServer : IAsyncDisposable
                         continue;
                     }
 
+                    // 连接级 RequestId 单调检查（防乱序回退）：跨连接重放由 Nonce 全局查重承担，
+                    // 同一 SID 的多客户端并发各自维护独立 RequestId 时钟（ADR-002），不可跨连接比较
+                    if (session.LastSeenRequestId.HasValue && message.RequestId <= session.LastSeenRequestId.Value)
+                    {
+                        await WriteErrorResponseAsync(pipeStream, message.RequestId,
+                            IpcErrorCodes.IpcReplayDetected,
+                            "request id must strictly increase within a connection.",
+                            closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    session.LastSeenRequestId = message.RequestId;
+
                     switch (message.MessageType)
                     {
                         case IpcConstants.MessageTypeHandshake:
@@ -229,6 +278,7 @@ public sealed class IpcServer : IAsyncDisposable
                                 session.GrantedCapabilities = outcome.GrantedCapabilities;
                                 session.SessionId = outcome.SessionId;
                                 session.CallerSid = message.SenderSid;
+                                session.Component = outcome.Component;
                             }
 
                             break;
