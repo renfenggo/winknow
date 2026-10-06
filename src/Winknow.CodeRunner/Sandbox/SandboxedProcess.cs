@@ -276,22 +276,18 @@ public sealed class SandboxedProcess : IDisposable
     }
 
     /// <summary>
-    /// 读取 stdout 累积数据（轮询直至无新数据且静默或 EOF）。
+    /// 读取 stdout 累积数据（阻塞至写端关闭 EOF 或读满上限）。
     /// </summary>
-    /// <param name="maxBytes">读取上限（超出即停，配合截断标记）。</param>
-    /// <param name="drainTimeoutMs">进程退出后继续排空的等待窗口。</param>
+    /// <param name="maxBytes">读取上限（读满即停，配合截断标记）。</param>
     /// <returns>读到的字节。</returns>
-    public byte[] ReadStdout(int maxBytes, int drainTimeoutMs = 300) =>
-        ReadPipe(_stdoutRead, maxBytes, drainTimeoutMs);
+    public byte[] ReadStdout(int maxBytes) => ReadPipe(_stdoutRead, maxBytes);
 
     /// <summary>
-    /// 读取 stderr 累积数据（轮询直至无新数据且静默或 EOF）。
+    /// 读取 stderr 累积数据（阻塞至写端关闭 EOF 或读满上限）。
     /// </summary>
-    /// <param name="maxBytes">读取上限（超出即停，配合截断标记）。</param>
-    /// <param name="drainTimeoutMs">进程退出后继续排空的等待窗口。</param>
+    /// <param name="maxBytes">读取上限（读满即停，配合截断标记）。</param>
     /// <returns>读到的字节。</returns>
-    public byte[] ReadStderr(int maxBytes, int drainTimeoutMs = 300) =>
-        ReadPipe(_stderrRead, maxBytes, drainTimeoutMs);
+    public byte[] ReadStderr(int maxBytes) => ReadPipe(_stderrRead, maxBytes);
 
     /// <summary>释放进程/线程/管道句柄。</summary>
     public void Dispose()
@@ -330,41 +326,22 @@ public sealed class SandboxedProcess : IDisposable
         return (read, write);
     }
 
-    private byte[] ReadPipe(IntPtr pipe, int maxBytes, int drainTimeoutMs)
+    private byte[] ReadPipe(IntPtr pipe, int maxBytes)
     {
         if (pipe == IntPtr.Zero)
         {
             return Array.Empty<byte>();
         }
 
+        // ReadFile 阻塞语义：有数据即读（EOF 前缓冲数据不丢），写端全关返回
+        // FALSE(ERROR_BROKEN_PIPE) 即 EOF。不得用 PeekNamedPipe 轮询——写端关闭后
+        // Peek 直接失败，缓冲区残留数据会被整段丢弃（快退出程序的输出竞态）。
         using var buffer = new MemoryStream();
         var chunk = new byte[64 * 1024];
-        DateTime? idleSince = null;
-
         while (buffer.Length < maxBytes)
         {
-            if (!NativeMethods.PeekNamedPipe(pipe, IntPtr.Zero, 0, IntPtr.Zero, out var available, IntPtr.Zero))
-            {
-                break; // 管道已断（写端全部关闭 = EOF）
-            }
-
-            if (available == 0)
-            {
-                // 静默窗口：连续无新数据超过 drainTimeoutMs 即认为读尽
-                // （进程树退出后写端关闭会走 PeekNamedPipe 失败分支，此窗口兜底运行中调用）
-                idleSince ??= DateTime.UtcNow;
-                if ((DateTime.UtcNow - idleSince.Value).TotalMilliseconds >= drainTimeoutMs)
-                {
-                    break;
-                }
-
-                Thread.Sleep(20);
-                continue;
-            }
-
-            idleSince = null;
-            var toRead = (int)Math.Min(available, (uint)Math.Min(chunk.Length, maxBytes - (int)buffer.Length));
-            if (!NativeMethods.ReadFile(pipe, chunk, (uint)toRead, out var read, IntPtr.Zero))
+            var want = (uint)Math.Min(chunk.Length, maxBytes - (int)buffer.Length);
+            if (!NativeMethods.ReadFile(pipe, chunk, want, out var read, IntPtr.Zero))
             {
                 break;
             }
