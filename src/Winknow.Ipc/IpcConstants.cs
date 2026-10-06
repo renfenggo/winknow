@@ -32,6 +32,15 @@ public static class IpcConstants
     /// <summary>连接和命令的成功确认。</summary>
     public const ushort MessageTypeAck = 0x0002;
 
+    /// <summary>连接期握手帧（M2，payload 为 HandshakeRequest JSON）。</summary>
+    public const ushort MessageTypeHandshake = 0x0003;
+
+    /// <summary>业务请求帧（M2，payload 为 RequestEnvelope JSON）。</summary>
+    public const ushort MessageTypeRequest = 0x0004;
+
+    /// <summary>业务响应帧（M2，payload 为 ResponseEnvelope JSON）。</summary>
+    public const ushort MessageTypeResponse = 0x0005;
+
     /// <summary>策略下发消息类型。</summary>
     public const ushort MessageTypePolicyUpdate = 0x0010;
 
