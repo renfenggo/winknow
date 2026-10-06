@@ -106,7 +106,39 @@ public sealed class IpcClient : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 发送旧帧类型心跳并等待 Ack（ADR-001 兼容路径，SessionAgent 周期保活用；
+    /// 服务端对旧帧类型保持 MessageReceived + Ack 行为）。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    public async Task SendHeartbeatAsync(CancellationToken cancellationToken = default)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(IpcConstants.RequestTimeoutMs);
+        try
+        {
+            await SendAndReceiveFrameAsync(
+                IpcConstants.MessageTypeHeartbeat,
+                payloadJson: null,
+                expectedFrameType: IpcConstants.MessageTypeAck,
+                timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new IOException("heartbeat timed out at client.");
+        }
+    }
+
     private async Task<ResponseEnvelope> SendAndReceiveAsync(ushort messageType, string payloadJson, CancellationToken cancellationToken)
+    {
+        var responseFrame = await SendAndReceiveFrameAsync(
+            messageType, payloadJson, IpcConstants.MessageTypeResponse, cancellationToken).ConfigureAwait(false);
+        var response = ResponseEnvelope.Deserialize(Encoding.UTF8.GetString(responseFrame.Payload));
+        return response ?? throw new IOException("server response payload is not a valid envelope.");
+    }
+
+    private async Task<IpcMessage> SendAndReceiveFrameAsync(ushort messageType, string? payloadJson,
+        ushort expectedFrameType, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
 
@@ -120,7 +152,7 @@ public sealed class IpcClient : IAsyncDisposable
         var frame = IpcMessage.Create(
             requestId: requestId,
             messageType: messageType,
-            payload: Encoding.UTF8.GetBytes(payloadJson));
+            payload: payloadJson is null ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(payloadJson));
 
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -133,7 +165,7 @@ public sealed class IpcClient : IAsyncDisposable
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             var responseFrame = await ReadFrameAsync(stream, cancellationToken).ConfigureAwait(false);
-            if (responseFrame.MessageType != IpcConstants.MessageTypeResponse)
+            if (responseFrame.MessageType != expectedFrameType)
             {
                 throw new IOException($"unexpected frame type 0x{responseFrame.MessageType:X4} from server.");
             }
@@ -143,8 +175,7 @@ public sealed class IpcClient : IAsyncDisposable
                 throw new IOException("response request id does not match the request.");
             }
 
-            var response = ResponseEnvelope.Deserialize(Encoding.UTF8.GetString(responseFrame.Payload));
-            return response ?? throw new IOException("server response payload is not a valid envelope.");
+            return responseFrame;
         }
         finally
         {

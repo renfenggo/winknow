@@ -1,6 +1,10 @@
+using System.Runtime.InteropServices;
 using System.Security.Principal;
-using Winknow.Ipc;
 using Microsoft.Extensions.Logging;
+using Winknow.Core;
+using Winknow.Ipc;
+using Winknow.Ipc.Protocol;
+using Winknow.Ipc.Session;
 
 namespace Winknow.SessionAgent;
 
@@ -10,120 +14,132 @@ namespace Winknow.SessionAgent;
 ///
 /// 启动方式：由 ControlService 在用户登录时通过 CreateProcessAsUser 拉起。
 /// 实例数：每个活动用户会话 1 个（通过 SessionMutex 保证）。
+///
+/// M2 定位（ADR-002）：SessionAgent 降级保留——主 UI 职责由 Flutter 经
+/// DesktopBridge 承担，Agent 仅维持连接期握手 + 旧帧心跳保活（ADR-001 兼容
+/// 路径）；LockOverlay 遮罩组件保留在 LockOverlay.cs，下发链路待后续
+/// 里程碑契约扩展（method_registry v1 无 session 维度方法）后接入。
 /// </summary>
 internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        // 1. 会话互斥：确保每个用户会话只有一个 Agent（用真实 Terminal Services
+        //    会话 ID，而非进程 ID——进程 ID 每次启动都不同，无法标识会话）
         var sessionId = GetCurrentSessionId();
-
-        // 1. 互斥锁：确保每会话只有一个 Agent
         using var mutex = new SessionMutex(sessionId);
         if (!mutex.IsAcquired)
         {
-            // 本会话已有 Agent 运行，退出
             return 2;
         }
 
-        // 2. 获取当前用户 SID
         var senderSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+        var logger = loggerFactory.CreateLogger("Winknow.SessionAgent");
 
-        // 3. 创建锁屏遮罩组件
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-        var logger = loggerFactory.CreateLogger<LockOverlay>();
-        var lockOverlay = new LockOverlay(logger);
-
-        // 4. 连接 ControlService IPC
         using var cts = new CancellationTokenSource();
-        await using var ipcClient = new IpcClient(IpcConstants.ControlPipeName, senderSid);
-
-        var connectResult = await ipcClient.ConnectAsync(cts.Token);
-        if (!connectResult.IsSuccess)
+        Console.CancelKeyPress += (_, eventArgs) =>
         {
-            logger.LogError("Failed to connect to ControlService IPC");
-            return 3;
-        }
+            eventArgs.Cancel = true;
+            cts.Cancel();
+        };
 
-        // 5. 注册消息处理
-        ipcClient.MessageReceived += (message, cancellationToken) =>
-            OnMessageReceived(message, cancellationToken, lockOverlay, logger);
-
-        // 6. 启动心跳定时器
-        using var heartbeatTimer = new PeriodicTimer(TimeSpan.FromSeconds(30));
-        _ = HeartbeatLoopAsync(ipcClient, heartbeatTimer, cts.Token);
-
-        // 7. 等待退出信号
-        await WaitForExitAsync(cts.Token);
-
-        // 8. 清理
-        cts.Cancel();
-        ipcClient.MessageReceived -= (message, cancellationToken) =>
-            OnMessageReceived(message, cancellationToken, lockOverlay, logger);
-        lockOverlay.Dispose();
-
-        return 0;
-    }
-
-    private static Task OnMessageReceived(IpcMessage message, CancellationToken cancellationToken, LockOverlay lockOverlay, ILogger<LockOverlay> logger)
-    {
-        logger.LogInformation("Received IPC message: {MessageType}", message.MessageType);
-
-        // TODO 第3周：处理策略更新、屏幕控制等命令
-        // TODO 第3周：根据消息类型执行对应操作
-
-        // 处理锁屏遮罩消息
-        if (message.MessageType == 1001) // 假设1001是LockOverlay消息类型
+        // 2. 连接 ControlService 并完成连接期握手（component=session_agent）
+        var deviceId = DeviceId.Generate();
+        var componentVersion = "7.0.0";
+        for (var i = 0; i < args.Length - 1; i++)
         {
-            var action = System.Text.Encoding.UTF8.GetString(message.Payload);
-            switch (action.ToUpperInvariant())
+            if (args[i] == "--version")
             {
-                case "SHOW":
-                    lockOverlay.Show();
-                    logger.LogInformation("Lock overlay shown");
-                    break;
-                case "HIDE":
-                    lockOverlay.Hide();
-                    logger.LogInformation("Lock overlay hidden");
-                    break;
+                componentVersion = args[i + 1];
             }
         }
 
-        return Task.CompletedTask;
+        await using var client = new IpcClient(IpcConstants.ControlPipeName);
+        try
+        {
+            await client.ConnectAsync(cancellationToken: cts.Token);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to connect to ControlService IPC pipe {PipeName}.", IpcConstants.ControlPipeName);
+            return 3;
+        }
+
+        var handshake = new HandshakeParams
+        {
+            ProtocolVersion = ProtocolVersion.Current.ToString(),
+            Component = "session_agent",
+            ComponentVersion = componentVersion,
+            Capabilities = Array.Empty<string>(),
+            DeviceId = deviceId,
+            CallerSid = senderSid,
+            SessionId = $"session-{sessionId}",
+        };
+
+        var handshakeResponse = await client.HandshakeAsync(handshake, cts.Token);
+        if (!handshakeResponse.Ok)
+        {
+            logger.LogError(
+                "Handshake rejected: {ErrorCode} {Message}.",
+                handshakeResponse.Error?.Code, handshakeResponse.Error?.Message);
+            return 4;
+        }
+
+        logger.LogInformation(
+            "SessionAgent started: session={SessionId} sid={SenderSid} device={DeviceId}.",
+            sessionId, senderSid, deviceId);
+
+        // 3. 心跳保活（旧帧类型，服务端 MessageReceived + Ack 兼容路径）
+        using var heartbeatTimer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        var heartbeatTask = HeartbeatLoopAsync(client, heartbeatTimer, logger, cts.Token);
+
+        // 4. 等待退出信号（服务注销时进程被终止；Ctrl+C 供调试）
+        try
+        {
+            await Task.Delay(Timeout.Infinite, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常退出
+        }
+
+        await heartbeatTask;
+        return 0;
     }
 
-    private static async Task HeartbeatLoopAsync(IpcClient client, PeriodicTimer timer, CancellationToken cancellationToken)
+    private static async Task HeartbeatLoopAsync(IpcClient client, PeriodicTimer timer,
+        ILogger logger, CancellationToken cancellationToken)
     {
         try
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
                 await client.SendHeartbeatAsync(cancellationToken);
+                logger.LogDebug("Heartbeat acknowledged.");
             }
         }
         catch (OperationCanceledException)
         {
             // 正常关闭
         }
+        catch (Exception ex)
+        {
+            // 连接中断等致命错误：通知主流程退出，由 ControlService 在下个周期重新拉起
+            logger.LogError(ex, "Heartbeat failed, exiting.");
+            Environment.Exit(5);
+        }
     }
 
+    /// <summary>
+    /// 获取当前进程所在的 Terminal Services 会话 ID（0 为服务会话，交互会话 &gt;= 1）。
+    /// </summary>
     private static int GetCurrentSessionId()
     {
-        // SessionAgent 由 ControlService 在用户会话中启动，
-        // 可通过 GetCurrentProcess 的 SessionId 获取。
-        return Environment.ProcessId;
+        return ProcessIdToSessionId((uint)Environment.ProcessId, out var sessionId) ? (int)sessionId : 0;
     }
 
-    private static Task WaitForExitAsync(CancellationToken cancellationToken)
-    {
-        // TODO 第3周：集成 Win32 消息循环（GetMessage）处理键盘钩子
-        // 当前为占位实现，等待 Ctrl+C 或取消
-        try
-        {
-            return Task.Delay(Timeout.Infinite, cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            return Task.CompletedTask;
-        }
-    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
 }
