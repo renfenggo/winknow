@@ -50,9 +50,6 @@ public static class IpcConstants
     /// <summary>会话状态上报。</summary>
     public const ushort MessageTypeSessionStatus = 0x0020;
 
-    /// <summary>管理命令。</summary>
-    public const ushort MessageTypeAdminCommand = 0x0100;
-
     /// <summary>维护模式通知。</summary>
     public const ushort MessageTypeMaintenanceMode = 0x0101;
 

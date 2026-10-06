@@ -1,5 +1,8 @@
+using System.Security.Principal;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Winknow.Core;
+using Winknow.Core.Results;
 using Winknow.DeviceSecurity;
 using Winknow.Ipc;
 using Winknow.Ipc.Protocol;
@@ -46,6 +49,7 @@ internal sealed class Worker : BackgroundService
     private DataRetentionManager? _retentionManager;
     private SingleInstanceGuard? _instanceGuard;
     private HeartbeatLease? _heartbeatLease;
+    private ControlCommandHost? _commandHost;
 
     internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
     {
@@ -208,8 +212,24 @@ internal sealed class Worker : BackgroundService
             new IpcHandshakeValidator(serverDescriptor),
             _loggerFactory.CreateLogger<IpcServer>());
         _ipcServer.MessageReceived += OnMessageReceived;
+
+        // M2-3：注册表式 dispatcher（method_registry.md 白名单，system/bridge 角色区分）
+        var systemSidValue = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
+        var adminsSidValue = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value;
+        _commandHost = new ControlCommandHost(
+            _loggerFactory.CreateLogger<ControlCommandHost>(),
+            deviceId,
+            Constants.Version,
+            sid => sid == systemSidValue || sid == adminsSidValue)
+        {
+            PolicySnapshot = () => _policy,
+            PolicyApplier = policyJson => ApplyPolicy(policyPath, policyJson),
+            PolicyRestorer = () => RestorePolicy(policyPath),
+        };
+        _ipcServer.RequestReceived += OnRequestReceived;
         await _ipcServer.StartAsync();
         _logger?.LogInformation("IPC server started on pipe {PipeName}", IpcConstants.ControlPipeName);
+        _logger?.LogInformation("IPC command registry ready: {Count} methods", _commandHost.Registry.Count);
 
         // 4. 启动 WMI 进程实时监听
         _wmiMonitor = new WmiProcessMonitor(_loggerFactory.CreateLogger<WmiProcessMonitor>());
@@ -332,6 +352,7 @@ internal sealed class Worker : BackgroundService
             if (_ipcServer is not null)
             {
                 _ipcServer.MessageReceived -= OnMessageReceived;
+                _ipcServer.RequestReceived -= OnRequestReceived;
                 await _ipcServer.StopAsync();
             }
 
@@ -424,5 +445,127 @@ internal sealed class Worker : BackgroundService
         _logger?.LogDebug("Received IPC message: Type={MessageType} RequestId={RequestId}",
             message.MessageType, message.RequestId);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 业务请求帧处理（M2-3 注册表式 dispatcher）：解析 RequestEnvelope 并转发命令注册表。
+    /// </summary>
+    private async Task<ResponseEnvelope> OnRequestReceived(IpcRequestContext context, CancellationToken cancellationToken)
+    {
+        if (_commandHost is null)
+        {
+            return ResponseEnvelope.FromError(ErrorEnvelope.Create(
+                IpcErrorCodes.Unavailable, "command host is not initialized."));
+        }
+
+        RequestEnvelope? request;
+        try
+        {
+            var json = Encoding.UTF8.GetString(context.Message.Payload);
+            request = RequestEnvelope.Deserialize(json);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning("IPC request payload parse failed: {Error}", ex.Message);
+            request = null;
+        }
+
+        if (request is null || string.IsNullOrEmpty(request.Method))
+        {
+            return ResponseEnvelope.FromError(ErrorEnvelope.Create(
+                IpcErrorCodes.InvalidArgument, "malformed request payload."));
+        }
+
+        return await _commandHost.DispatchAsync(request, context.Session, cancellationToken);
+    }
+
+    /// <summary>
+    /// 验证、备份并落盘新策略，随后重载（policy.apply 后端）。
+    /// 非法策略在候选文件上即被拒绝，绝不触碰当前生效文件。
+    /// </summary>
+    private Result<PolicyFile> ApplyPolicy(string policyPath, string policyJson)
+    {
+        var loader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
+        var candidatePath = policyPath + ".candidate";
+        try
+        {
+            File.WriteAllText(candidatePath, policyJson);
+            var validated = loader.Load(candidatePath);
+            if (!validated.IsSuccess)
+            {
+                TryDeleteFile(candidatePath);
+                return validated;
+            }
+
+            if (File.Exists(policyPath))
+            {
+                File.Copy(policyPath, policyPath + ".bak", overwrite: true);
+            }
+
+            File.Move(candidatePath, policyPath, overwrite: true);
+
+            var reloaded = loader.Load(policyPath);
+            if (reloaded.IsSuccess)
+            {
+                _policy = reloaded.Data!;
+            }
+
+            return reloaded;
+        }
+        catch (Exception ex)
+        {
+            TryDeleteFile(candidatePath);
+            return Result<PolicyFile>.Failure(ErrorCode.Unknown, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 从备份恢复策略并重载（policy.restore 后端）。
+    /// </summary>
+    private Result<PolicyFile> RestorePolicy(string policyPath)
+    {
+        var backupPath = policyPath + ".bak";
+        if (!File.Exists(backupPath))
+        {
+            return Result<PolicyFile>.Failure(ErrorCode.PathNotFound, "no policy backup available.");
+        }
+
+        try
+        {
+            var loader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
+            var restored = loader.Load(backupPath);
+            if (!restored.IsSuccess)
+            {
+                return restored;
+            }
+
+            File.Copy(backupPath, policyPath, overwrite: true);
+            var reloaded = loader.Load(policyPath);
+            if (reloaded.IsSuccess)
+            {
+                _policy = reloaded.Data!;
+            }
+
+            return reloaded;
+        }
+        catch (Exception ex)
+        {
+            return Result<PolicyFile>.Failure(ErrorCode.Unknown, ex.Message);
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+            // 尽力清理，失败不影响主流程
+        }
     }
 }

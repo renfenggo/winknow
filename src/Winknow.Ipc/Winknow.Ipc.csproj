@@ -14,5 +14,9 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Winknow.Ipc.Tests" />
+  </ItemGroup>
+
 </Project>
 

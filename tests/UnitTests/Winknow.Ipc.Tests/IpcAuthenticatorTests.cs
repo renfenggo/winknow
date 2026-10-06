@@ -35,8 +35,9 @@ public sealed class IpcAuthenticatorTests : IDisposable
     [Fact]
     public void ValidateMessage_UnauthorizedSid_ShouldReject()
     {
-        // 验收项：普通学生自写程序不能发送管理命令
-        var message = IpcMessage.Create(1, IpcConstants.MessageTypeAdminCommand, Array.Empty<byte>(), AttackerSid);
+        // 验收项：普通学生自写程序不能发送管理命令（M2 起管理命令改走
+        // RequestEnvelope 白名单方法；此处保留帧级 SID 校验语义验证）
+        var message = IpcMessage.Create(1, IpcConstants.MessageTypeMaintenanceMode, Array.Empty<byte>(), AttackerSid);
         var result = _authenticator.ValidateMessage(message);
         Assert.False(result.IsSuccess);
         Assert.Equal(ErrorCode.Unauthorized, result.ErrorCode);
