@@ -1,29 +1,39 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using Winknow.Core.Results;
 using Winknow.Security;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
 
 namespace Winknow.Licensing;
 
 /// <summary>
 /// 教师机侧轻量端点：名单查询+令牌签发+动态码生成。
+///
+/// R04（审查 2026-10-07）：令牌签发必须持 RSA 私钥真实签名；
+/// 未配置签发密钥时拒绝签发（InvalidConfiguration）——
+/// 未准备好的授权能力保持不可启用，不再退化为无签名令牌。
 /// </summary>
 public sealed class TeacherLicenseServer
 {
     private readonly ConcurrentDictionary<string, AuthorizedDevice> _authorizedDevices;
     private readonly ILogger<TeacherLicenseServer>? _logger;
+    private readonly RSA? _signingKey;
 
     /// <summary>授权设备名单。</summary>
     public IReadOnlyDictionary<string, AuthorizedDevice> AuthorizedDevices => _authorizedDevices;
 
     /// <summary>
-    /// 创建教师机授权服务器。
+    /// 创建教师机授权服务器（未配置签发密钥：令牌签发不可用，其余能力保留）。
     /// </summary>
     /// <param name="logger">可选的日志记录器。</param>
-    public TeacherLicenseServer(ILogger<TeacherLicenseServer>? logger = null)
+    /// <param name="signingKey">令牌签发私钥（教师机持有；省略则拒绝签发）。</param>
+    public TeacherLicenseServer(
+        ILogger<TeacherLicenseServer>? logger = null,
+        RSA? signingKey = null)
     {
         _authorizedDevices = new ConcurrentDictionary<string, AuthorizedDevice>();
         _logger = logger;
+        _signingKey = signingKey;
 
         // 初始化测试设备名单
         InitializeTestDevices();
@@ -53,20 +63,21 @@ public sealed class TeacherLicenseServer
             return Result<LicenseToken>.Failure(ErrorCode.Unauthorized, "Device is locked");
         }
 
+        // R04：未配置签发私钥即拒绝签发（fail-closed，不退化为无签名令牌）
+        if (_signingKey is null)
+        {
+            _logger?.LogError(
+                "Token issuance requested for {DeviceId} but no signing key is configured", deviceId);
+            return Result<LicenseToken>.Failure(
+                ErrorCode.InvalidConfiguration,
+                "License signing key not configured; token issuance disabled");
+        }
+
         try
         {
-            // 创建令牌
+            // 创建令牌并用教师机私钥真实签名（R04）
             var token = LicenseToken.Create(deviceId, validityMinutes: 30);
-
-            // 签名（简化版本）
-            var signature = SignToken(token);
-            var signedToken = new LicenseToken
-            {
-                DeviceId = token.DeviceId,
-                IssuedAt = token.IssuedAt,
-                ValidityMinutes = token.ValidityMinutes,
-                Signature = signature
-            };
+            var signedToken = LicenseToken.Sign(token, _signingKey);
 
             // 更新设备状态
             deviceInfo.LastSeen = DateTime.UtcNow;
@@ -238,17 +249,6 @@ public sealed class TeacherLicenseServer
         // TODO 实现完整的自定义步长TOTP
         var code = Winknow.Security.TotpGenerator.GenerateCode(secret);
         return code;
-    }
-
-    /// <summary>
-    /// 签名令牌（简化版本）。
-    /// </summary>
-    private string SignToken(LicenseToken token)
-    {
-        var data = $"{token.DeviceId}|{token.IssuedAt:O}|{token.ValidityMinutes}";
-        using var sha256 = System.Security.Cryptography.SHA256.Create();
-        var hash = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-        return Convert.ToBase64String(hash);
     }
 
     /// <summary>

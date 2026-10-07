@@ -135,9 +135,11 @@ public sealed class ArchitectureTests
         Assert.True(File.Exists(policyPath), "默认策略文件应存在");
 
         var content = File.ReadAllText(policyPath);
-        Assert.Contains("\"Version\"", content, StringComparison.Ordinal);
-        Assert.Contains("\"SoftwareControl\"", content, StringComparison.Ordinal);
-        Assert.Contains("\"NetworkControl\"", content, StringComparison.Ordinal);
-        Assert.Contains("\"UsbControl\"", content, StringComparison.Ordinal);
+        // R04：默认策略已由 PolicySignTool 以规范化 camelCase 格式签名回写
+        Assert.Contains("\"version\"", content, StringComparison.Ordinal);
+        Assert.Contains("\"softwareControl\"", content, StringComparison.Ordinal);
+        Assert.Contains("\"networkControl\"", content, StringComparison.Ordinal);
+        Assert.Contains("\"usbControl\"", content, StringComparison.Ordinal);
+        Assert.Contains("\"signature\"", content, StringComparison.Ordinal);
     }
 }

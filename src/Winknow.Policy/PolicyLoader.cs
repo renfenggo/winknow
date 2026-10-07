@@ -24,12 +24,22 @@ public sealed class PolicyLoader
     }
 
     /// <summary>
-    /// 从 JSON 文件加载策略。
+    /// 从 JSON 文件加载策略（不验签）。
     /// </summary>
     /// <param name="filePath">策略文件路径。</param>
-    /// <param name="validateSignature">是否验证签名（第7周前默认 false）。</param>
+    /// <param name="validateSignature">是否验证签名（兼容旧调用，默认 false）。</param>
     /// <returns>成功返回策略文件，失败返回错误码。</returns>
     public Result<PolicyFile> Load(string filePath, bool validateSignature = false)
+        => Load(filePath, validateSignature, publicKey: null);
+
+    /// <summary>
+    /// 从 JSON 文件加载策略（R04：支持真实验签，fail-closed）。
+    /// </summary>
+    /// <param name="filePath">策略文件路径。</param>
+    /// <param name="validateSignature">是否验证签名。</param>
+    /// <param name="publicKey">可信公钥（validateSignature=true 时必填，缺失即拒绝）。</param>
+    /// <returns>成功返回策略文件，失败返回错误码（验签失败为 PolicySignatureInvalid）。</returns>
+    public Result<PolicyFile> Load(string filePath, bool validateSignature, System.Security.Cryptography.RSA? publicKey)
     {
         if (!File.Exists(filePath))
         {
@@ -63,11 +73,31 @@ public sealed class PolicyLoader
                 return Result<PolicyFile>.Failure(validationResult.ErrorCode, validationResult.ErrorMessage);
             }
 
-            // 签名验证（第7周前跳过）
+            // R04：真实签名验证（fail-closed：未签名/伪签名/公钥缺失或错误一律拒绝）
             if (validateSignature)
             {
-                // TODO 第7周：实现策略签名验证
-                _logger?.LogWarning("Policy signature validation not yet implemented (Week 7)");
+                if (publicKey is null)
+                {
+                    _logger?.LogError(
+                        "Policy signature validation requested but no trusted public key was provided: {Path}",
+                        filePath);
+                    return Result<PolicyFile>.Failure(
+                        ErrorCode.PolicySignatureInvalid,
+                        "Signature validation requested but no trusted public key was provided");
+                }
+
+                var signatureResult = PolicySigner.VerifySignature(policy, publicKey);
+                if (!signatureResult.IsSuccess)
+                {
+                    _logger?.LogError(
+                        "Policy signature verification failed: {Path}: {Error}",
+                        filePath, signatureResult.ErrorMessage);
+                    return Result<PolicyFile>.Failure(
+                        ErrorCode.PolicySignatureInvalid, signatureResult.ErrorMessage ?? "policy signature invalid");
+                }
+
+                _logger?.LogInformation("Policy signature verified: {PolicyId} v{Version}",
+                    policy.PolicyId, policy.Version);
             }
 
             _logger?.LogInformation("Policy loaded: {PolicyId} v{Version}", policy.PolicyId, policy.Version);

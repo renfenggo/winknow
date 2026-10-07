@@ -1,63 +1,63 @@
 {
-  "Version": "7.0.0",
-  "PolicyId": "default-classroom-v1",
-  "CreatedAt": "2026-08-07T00:00:00Z",
-  "Description": "编程课堂默认策略 - 适用于 V7.0",
-  "SoftwareControl": {
-    "Whitelist": {
-      "ByPublisher": [
+  "version": "7.0.0",
+  "policyId": "default-classroom-v1",
+  "createdAt": "2026-08-07T00:00:00Z",
+  "description": "\u7F16\u7A0B\u8BFE\u5802\u9ED8\u8BA4\u7B56\u7565 - \u9002\u7528\u4E8E V7.0",
+  "softwareControl": {
+    "whitelist": {
+      "byPublisher": [
         "Microsoft Corporation",
         "Microsoft"
       ],
-      "ByPath": [
+      "byPath": [
         {
-          "Path": "C:\\Program Files\\Microsoft Visual Studio\\*",
-          "Hash": "",
-          "Description": "Visual Studio"
+          "path": "C:\\Program Files\\Microsoft Visual Studio\\*",
+          "hash": "",
+          "description": "Visual Studio"
         },
         {
-          "Path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\*",
-          "Hash": "",
-          "Description": "Visual Studio (x86)"
+          "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\*",
+          "hash": "",
+          "description": "Visual Studio (x86)"
         },
         {
-          "Path": "C:\\Program Files\\Microsoft VS Code\\*",
-          "Hash": "",
-          "Description": "VS Code 系统级安装"
+          "path": "C:\\Program Files\\Microsoft VS Code\\*",
+          "hash": "",
+          "description": "VS Code \u7CFB\u7EDF\u7EA7\u5B89\u88C5"
         },
         {
-          "Path": "C:\\Users\\*\\AppData\\Local\\Programs\\Microsoft VS Code\\*",
-          "Hash": "",
-          "Description": "VS Code 用户级安装"
+          "path": "C:\\Users\\*\\AppData\\Local\\Programs\\Microsoft VS Code\\*",
+          "hash": "",
+          "description": "VS Code \u7528\u6237\u7EA7\u5B89\u88C5"
         },
         {
-          "Path": "C:\\Program Files\\Dev-Cpp\\*",
-          "Hash": "",
-          "Description": "Dev-C++ IDE 及工具链(gcc/g++/gdb)"
+          "path": "C:\\Program Files\\Dev-Cpp\\*",
+          "hash": "",
+          "description": "Dev-C\u002B\u002B IDE \u53CA\u5DE5\u5177\u94FE(gcc/g\u002B\u002B/gdb)"
         },
         {
-          "Path": "C:\\Program Files\\Google\\Chrome\\Application\\*",
-          "Hash": "",
-          "Description": "Chrome 浏览器"
+          "path": "C:\\Program Files\\Google\\Chrome\\Application\\*",
+          "hash": "",
+          "description": "Chrome \u6D4F\u89C8\u5668"
         },
         {
-          "Path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\*",
-          "Hash": "",
-          "Description": "Edge 浏览器"
+          "path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\*",
+          "hash": "",
+          "description": "Edge \u6D4F\u89C8\u5668"
         }
       ],
-      "ByHash": []
+      "byHash": []
     },
-    "StudentOutput": {
-      "AllowedDirectories": [
+    "studentOutput": {
+      "allowedDirectories": [
         "C:\\Users\\*\\source\\repos\\**",
         "C:\\Dev-Cpp\\Projects\\**"
       ],
-      "MaxValidityHours": 2,
-      "MaxFileSizeMB": 50
+      "maxValidityHours": 2,
+      "maxFileSizeMB": 50
     },
-    "HighRiskInterpreters": {
-      "Blocked": [
+    "highRiskInterpreters": {
+      "blocked": [
         "powershell.exe",
         "wscript.exe",
         "cscript.exe",
@@ -66,94 +66,95 @@
         "mmc.exe"
       ]
     },
-    "RunnerExemptions": {
-      "Enabled": true,
-      "TrustedToolchainPaths": [
+    "runnerExemptions": {
+      "enabled": true,
+      "trustedToolchainPaths": [
         "C:\\Program Files (x86)\\Dev-Cpp\\**"
       ],
-      "WorkspaceRoot": "C:\\ProgramData\\Winknow\\runner",
-      "MaxSessionMinutes": 120
+      "workspaceRoot": "C:\\ProgramData\\Winknow\\runner",
+      "maxSessionMinutes": 120
     }
   },
-  "NetworkControl": {
-    "WebsiteWhitelist": {
-      "Domains": [
+  "networkControl": {
+    "websiteWhitelist": {
+      "domains": [
         "luogu.com.cn",
         "*.luogu.com.cn",
         "cdn.luogu.com.cn",
         "www.luogu.com.cn"
       ]
     },
-    "Proxy": {
-      "Allowed": false,
-      "ForceSystemProxy": true,
-      "Pac": {
-        "Allowed": false,
-        "AutoConfigUrl": ""
+    "proxy": {
+      "allowed": false,
+      "forceSystemProxy": true,
+      "pac": {
+        "allowed": false,
+        "autoConfigUrl": ""
       },
-      "FailMode": "strict"
+      "failMode": "strict"
     },
-    "Dns": {
-      "AllowedServers": [],
-      "BlockedServers": [
+    "dns": {
+      "allowedServers": [],
+      "blockedServers": [
         "8.8.8.8",
         "8.8.4.4",
         "1.1.1.1",
         "1.0.0.1"
       ],
-      "BlockDoh": true
+      "blockDoh": true
     },
-    "BrowserPolicy": {
-      "Chrome": {
-        "DisableCustomProxy": true,
-        "DisableDoh": true,
-        "DisableSecureDns": true
+    "browserPolicy": {
+      "chrome": {
+        "disableCustomProxy": true,
+        "disableDoh": true,
+        "disableSecureDns": true
       },
-      "Edge": {
-        "DisableCustomProxy": true,
-        "DisableDoh": true,
-        "DisableSecureDns": true
+      "edge": {
+        "disableCustomProxy": true,
+        "disableDoh": true,
+        "disableSecureDns": true
       }
     },
-    "VpnDetection": {
-      "BlockedProcesses": [],
-      "BlockedServices": [],
-      "DetectVirtualAdapters": true
+    "vpnDetection": {
+      "blockedProcesses": [],
+      "blockedServices": [],
+      "detectVirtualAdapters": true
     },
-    "WebsiteHealth": {
-      "Endpoints": [
+    "websiteHealth": {
+      "endpoints": [
         {
-          "Name": "洛谷首页",
-          "Url": "https://www.luogu.com.cn",
-          "ExpectedStatus": 200
+          "name": "\u6D1B\u8C37\u9996\u9875",
+          "url": "https://www.luogu.com.cn",
+          "expectedStatus": 200
         },
         {
-          "Name": "洛谷图片CDN",
-          "Url": "https://cdn.luogu.com.cn",
-          "ExpectedStatus": 0
+          "name": "\u6D1B\u8C37\u56FE\u7247CDN",
+          "url": "https://cdn.luogu.com.cn",
+          "expectedStatus": 0
         },
         {
-          "Name": "洛谷登录",
-          "Url": "https://www.luogu.com.cn/login",
-          "ExpectedStatus": 0
+          "name": "\u6D1B\u8C37\u767B\u5F55",
+          "url": "https://www.luogu.com.cn/login",
+          "expectedStatus": 0
         },
         {
-          "Name": "洛谷提交",
-          "Url": "https://www.luogu.com.cn/record",
-          "ExpectedStatus": 0
+          "name": "\u6D1B\u8C37\u63D0\u4EA4",
+          "url": "https://www.luogu.com.cn/record",
+          "expectedStatus": 0
         }
       ],
-      "TimeoutSeconds": 5,
-      "IntervalSeconds": 60
+      "timeoutSeconds": 5,
+      "intervalSeconds": 60
     }
   },
-  "UsbControl": {
-    "MassStorage": {
-      "Enabled": false,
-      "AdminOverride": true
+  "usbControl": {
+    "massStorage": {
+      "enabled": false,
+      "adminOverride": true
     },
-    "HidDevices": {
-      "Enabled": true
+    "hidDevices": {
+      "enabled": true
     }
-  }
+  },
+  "signature": "WCer\u002BEjMcsQ51h9X5URVf0QwG0Egafk5pWABFzpz9pduFJDi46f3hgRskb5M3elcMtoaar459pRmURQySaryWAGriUW0KWZRtQ897PjxSEUh4/jDKWeqBg4CoE5z2znANkOiozKmK\u002BA6GWp6jaxfAcswZtpPC6prd\u002BhcwNiha9paN\u002BdTqpmePDopLIBsMs8CvodyN4H2ijdeCBjy7JZShMmmTrmwYuFYZdoPXOeckQNC5sJKp8C68oMhPaFVrw5fkMxHoJx5dIc/159eJGfo57i0P91VDKXs5NkzsIkexhXi/ROW2QDchanVqmwdmFLq0i\u002Bfay6/v/ctc2K1bOlOnA=="
 }

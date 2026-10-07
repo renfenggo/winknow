@@ -100,7 +100,7 @@ internal sealed class Worker : BackgroundService
         if (File.Exists(policyPath))
         {
             var policyLoader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
-            var policyResult = policyLoader.Load(policyPath);
+            var policyResult = LoadPolicyTrusted(policyLoader, policyPath);
             if (policyResult.IsSuccess)
             {
                 _policy = policyResult.Data!;
@@ -586,6 +586,7 @@ internal sealed class Worker : BackgroundService
     /// <summary>
     /// 验证、备份并落盘新策略，随后重载（policy.apply 后端）。
     /// 非法策略在候选文件上即被拒绝，绝不触碰当前生效文件。
+    /// R04：候选与重载均强制真实验签（未签名/伪签名/篡改拒绝）。
     /// </summary>
     private Result<PolicyFile> ApplyPolicy(string policyPath, string policyJson)
     {
@@ -594,7 +595,7 @@ internal sealed class Worker : BackgroundService
         try
         {
             File.WriteAllText(candidatePath, policyJson);
-            var validated = loader.Load(candidatePath);
+            var validated = LoadPolicyTrusted(loader, candidatePath);
             if (!validated.IsSuccess)
             {
                 TryDeleteFile(candidatePath);
@@ -608,7 +609,7 @@ internal sealed class Worker : BackgroundService
 
             File.Move(candidatePath, policyPath, overwrite: true);
 
-            var reloaded = loader.Load(policyPath);
+            var reloaded = LoadPolicyTrusted(loader, policyPath);
             if (reloaded.IsSuccess)
             {
                 _policy = reloaded.Data!;
@@ -621,6 +622,16 @@ internal sealed class Worker : BackgroundService
             TryDeleteFile(candidatePath);
             return Result<PolicyFile>.Failure(ErrorCode.Unknown, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// R04：可信策略加载——强制真实验签，公钥来自 PolicyTrustAnchor
+    /// （配置 Policy:PublicKeyXml / 环境变量 / 内置 dev 公钥）。
+    /// </summary>
+    private Result<PolicyFile> LoadPolicyTrusted(PolicyLoader loader, string path)
+    {
+        using var publicKey = PolicyTrustAnchor.CreatePublicKey(_configuration["Policy:PublicKeyXml"]);
+        return loader.Load(path, validateSignature: true, publicKey);
     }
 
     /// <summary>
@@ -637,14 +648,14 @@ internal sealed class Worker : BackgroundService
         try
         {
             var loader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
-            var restored = loader.Load(backupPath);
+            var restored = LoadPolicyTrusted(loader, backupPath);
             if (!restored.IsSuccess)
             {
                 return restored;
             }
 
             File.Copy(backupPath, policyPath, overwrite: true);
-            var reloaded = loader.Load(policyPath);
+            var reloaded = LoadPolicyTrusted(loader, policyPath);
             if (reloaded.IsSuccess)
             {
                 _policy = reloaded.Data!;

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Winknow.Security;
 
@@ -6,6 +7,10 @@ namespace Winknow.Policy;
 
 /// <summary>
 /// V7.0 策略文件数据模型。
+///
+/// R04（审查 2026-10-07）：新增 Signature 字段——RSA-SHA256 对
+/// "不含签名的策略规范 JSON"（ToSignableJson）的签名（base64）。
+/// null 表示未签名（validateSignature=true 时拒绝加载）。
 /// </summary>
 public sealed class PolicyFile
 {
@@ -29,6 +34,37 @@ public sealed class PolicyFile
 
     /// <summary>USB 管控配置。</summary>
     public UsbControlSection UsbControl { get; init; } = new();
+
+    /// <summary>RSA-SHA256 签名（base64），null 表示未签名。</summary>
+    public string? Signature { get; init; }
+
+    /// <summary>
+    /// 生成用于签名的规范 JSON（不含 Signature 字段，camelCase，无缩进）。
+    /// 验签双方均基于"从文件反序列化出的对象"重新生成，因此字段顺序、
+    /// 大小写与空白差异不影响签名，篡改任何受控字段则验签失败。
+    /// </summary>
+    public string ToSignableJson()
+    {
+        var copy = new PolicyFile
+        {
+            Version = Version,
+            PolicyId = PolicyId,
+            CreatedAt = CreatedAt,
+            Description = Description,
+            SoftwareControl = SoftwareControl,
+            NetworkControl = NetworkControl,
+            UsbControl = UsbControl,
+            Signature = null
+        };
+        return JsonSerializer.Serialize(copy, SignableJsonOptions);
+    }
+
+    private static readonly JsonSerializerOptions SignableJsonOptions = new()
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     /// <summary>
     /// 将策略对象序列化为Base64编码的JSON字符串。
