@@ -26,6 +26,7 @@
     <ProjectReference Include="..\Winknow.Policy\Winknow.Policy.csproj" />
     <ProjectReference Include="..\Winknow.ProcessControl\Winknow.ProcessControl.csproj" />
     <ProjectReference Include="..\Winknow.Security\Winknow.Security.csproj" />
+    <ProjectReference Include="..\Winknow.Telemetry\Winknow.Telemetry.csproj" />
   </ItemGroup>
 </Project>
 

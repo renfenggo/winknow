@@ -1,5 +1,6 @@
 using System.Security.Principal;
 using System.Text;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Winknow.CodeRunner;
 using Winknow.CodeRunner.Compilation;
@@ -14,6 +15,7 @@ using Winknow.Network;
 using Winknow.Policy;
 using Winknow.ProcessControl;
 using Winknow.Security;
+using Winknow.Telemetry;
 
 namespace Winknow.ControlService;
 
@@ -54,12 +56,21 @@ internal sealed class Worker : BackgroundService
     private ControlCommandHost? _commandHost;
     private DynamicSidAuthorizer? _sidAuthorizer;
     private WtsSessionMonitor? _wtsMonitor;
+    private TelemetryRuntime? _telemetry;
 
-    internal Worker(ILogger<Worker> logger, ILoggerFactory loggerFactory)
+    internal Worker(
+        ILogger<Worker> logger, ILoggerFactory loggerFactory, IConfiguration configuration)
     {
         _logger = logger;
         _loggerFactory = loggerFactory;
+        _configuration = configuration;
     }
+
+    private readonly IConfiguration _configuration;
+
+    /// <summary>云端遥测运行时句柄（null = 未配置 BaseUrl，遥测整体禁用）。</summary>
+    private sealed record TelemetryRuntime(
+        TelemetryCollector Collector, CancellationTokenSource Cts, HttpClient Http);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -232,6 +243,8 @@ internal sealed class Worker : BackgroundService
         }
 
         // M2-3：注册表式 dispatcher（method_registry.md 白名单，system/bridge 角色区分）
+        // M8 Lane W：云端遥测（BaseUrl 未配置则整体禁用，管控功能零依赖云端）
+        _telemetry = StartTelemetry(deviceId);
         var systemSidValue = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
         var adminsSidValue = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value;
         _commandHost = new ControlCommandHost(
@@ -239,7 +252,8 @@ internal sealed class Worker : BackgroundService
             deviceId,
             Constants.Version,
             sid => sid == systemSidValue || sid == adminsSidValue,
-            new IpcAuditSink(_loggerFactory.CreateLogger<IpcAuditSink>(), _eventLogAnchor))
+            new IpcAuditSink(_loggerFactory.CreateLogger<IpcAuditSink>(), _eventLogAnchor),
+            telemetrySink: _telemetry?.Collector)
         {
             PolicySnapshot = () => _policy,
             PolicyApplier = policyJson => ApplyPolicy(policyPath, policyJson),
@@ -396,7 +410,60 @@ internal sealed class Worker : BackgroundService
             // 正常退出时清除租约：守护立即感知停止，无需等待超时
             _heartbeatLease?.Clear();
             _instanceGuard?.Dispose();
+
+            // 云端遥测停机（尽力而为；未配置时为 null）
+            if (_telemetry is not null)
+            {
+                _telemetry.Cts.Cancel();
+                _telemetry.Cts.Dispose();
+                _telemetry.Http.Dispose();
+                _logger?.LogInformation("Cloud telemetry stopped");
+            }
         }
+    }
+
+    /// <summary>
+    /// 读取 "Telemetry" 配置节并启动云端遥测（M8 Lane W）。
+    /// BaseUrl 为空 → 返回 null（默认禁用，零行为变化）；
+    /// 启用后周期心跳（/v1/devices/heartbeat）+ 事件排空（/v1/events），
+    /// 全部失败静默——管控功能不依赖云端可用性。
+    /// </summary>
+    private TelemetryRuntime? StartTelemetry(string deviceId)
+    {
+        var options = _configuration.GetSection("Telemetry").Get<TelemetryOptions>()
+            ?? new TelemetryOptions();
+        if (string.IsNullOrWhiteSpace(options.BaseUrl))
+        {
+            _logger?.LogInformation("Cloud telemetry disabled (Telemetry:BaseUrl not configured)");
+            return null;
+        }
+
+        var http = new HttpClient
+        {
+            BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/"),
+            Timeout = TimeSpan.FromSeconds(15),
+        };
+        var client = new PlatformApiClient(
+            http, options, _loggerFactory.CreateLogger<PlatformApiClient>());
+        var collector = new TelemetryCollector(options.MaxQueueSize);
+        var worker = new TelemetryWorker(
+            client, collector,
+            () => new HeartbeatPayload
+            {
+                DeviceId = deviceId,
+                DisplayName = Environment.MachineName,
+                Status = "online",
+                ClientVersion = Constants.Version,
+                PolicyVersion = _policy?.Version,
+            },
+            options,
+            _loggerFactory.CreateLogger<TelemetryWorker>());
+        var cts = new CancellationTokenSource();
+        _ = worker.RunAsync(cts.Token); // fire-and-forget：RunAsync 全吞异常
+        _logger?.LogInformation(
+            "Cloud telemetry enabled (heartbeat {Interval}s, user={User})",
+            options.HeartbeatIntervalSeconds, options.Username);
+        return new TelemetryRuntime(collector, cts, http);
     }
 
     /// <summary>

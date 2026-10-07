@@ -26,12 +26,12 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
-    public void ProductionProjects_ShouldBeSeventeen()
+    public void ProductionProjects_ShouldBeEighteen()
     {
-        // M2-6 新增 Winknow.DesktopBridge；M3 新增 Winknow.CodeRunner（学生代码安全编译执行，ADR-003）
+        // M2-6 新增 Winknow.DesktopBridge；M3 新增 Winknow.CodeRunner（ADR-003）；Lane W 新增 Winknow.Telemetry（云端心跳与事件上报）
         var srcDir = Path.Combine(RepoRoot, "src");
         var csprojs = Directory.GetFiles(srcDir, "*.csproj", SearchOption.AllDirectories);
-        Assert.Equal(17, csprojs.Length);
+        Assert.Equal(18, csprojs.Length);
     }
 
     [Fact]

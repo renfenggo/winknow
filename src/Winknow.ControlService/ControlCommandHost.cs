@@ -6,6 +6,7 @@ using Winknow.Ipc.Commands;
 using Winknow.Ipc.Protocol;
 using Winknow.Ipc.Session;
 using Winknow.Policy;
+using Winknow.Telemetry;
 
 namespace Winknow.ControlService;
 
@@ -30,6 +31,7 @@ internal sealed class ControlCommandHost
     private readonly string _deviceId;
     private readonly string _componentVersion;
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
+    private readonly ITelemetrySink? _telemetry;
 
     // 课堂会话状态（classroom.begin/end 管理的内存态，仅 system 角色可变）
     private readonly object _classroomLock = new();
@@ -43,16 +45,19 @@ internal sealed class ControlCommandHost
     /// <param name="componentVersion">ControlService 组件版本。</param>
     /// <param name="isSystemSid">系统 SID（LocalSystem/Administrators）判定谓词。</param>
     /// <param name="auditSink">IPC 审计输出端（M2-5；null 表示不落审计）。</param>
+    /// <param name="telemetrySink">云端事件入队端（M8 Lane W；null 表示遥测未启用）。</param>
     public ControlCommandHost(
         ILogger<ControlCommandHost>? logger,
         string deviceId,
         string componentVersion,
         Func<string, bool> isSystemSid,
-        IIpcAuditSink? auditSink = null)
+        IIpcAuditSink? auditSink = null,
+        ITelemetrySink? telemetrySink = null)
     {
         _logger = logger;
         _deviceId = deviceId;
         _componentVersion = componentVersion;
+        _telemetry = telemetrySink;
 
         Registry = new IpcCommandRegistry(isSystemSid, auditSink);
         RegisterAll();
@@ -235,6 +240,8 @@ internal sealed class ControlCommandHost
 
         _logger?.LogInformation("Classroom session begun (id={ClassroomId}, caller={CallerSid})",
             classroomId, context.Session.CallerSid);
+        _telemetry?.Enqueue(TelemetryEvents.ClassroomBegin(
+            classroomId, _deviceId, _componentVersion));
 
         return Task.FromResult(ResponseEnvelope.FromResult(new
         {
@@ -258,13 +265,16 @@ internal sealed class ControlCommandHost
 
         _logger?.LogInformation("Classroom session ended (id={ClassroomId}, caller={CallerSid})",
             classroomId, context.Session.CallerSid);
+        var endedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        _telemetry?.Enqueue(TelemetryEvents.ClassroomEnd(
+            classroomId, Math.Max(0, endedAt - startedAt), _deviceId, _componentVersion));
 
         return Task.FromResult(ResponseEnvelope.FromResult(new
         {
             active = false,
             classroom_id = classroomId,
             started_at_unix = startedAt,
-            ended_at_unix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            ended_at_unix = endedAt,
         }));
     }
 
@@ -288,6 +298,12 @@ internal sealed class ControlCommandHost
 
         var policyJson = policyElement.GetString() ?? string.Empty;
         var result = PolicyApplier(policyJson);
+        _telemetry?.Enqueue(TelemetryEvents.PolicyResult(
+            result.IsSuccess ? result.Data!.PolicyId : null,
+            result.IsSuccess ? result.Data!.Version : null,
+            result.IsSuccess,
+            result.IsSuccess ? null : result.ErrorMessage,
+            _deviceId, _componentVersion, context.Request.TraceId));
         if (!result.IsSuccess)
         {
             _logger?.LogWarning("Policy apply rejected: {Error} (caller={CallerSid})",
@@ -393,8 +409,61 @@ internal sealed class ControlCommandHost
         var result = await Runner.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
         _logger?.LogInformation("Runner execute: {RequestId} -> {Status} ({ElapsedMs}ms, caller={CallerSid})",
             result.RequestId, result.Status, result.ElapsedMs, context.Session.CallerSid);
+        EnqueueRunnerTelemetry(result);
         return ResponseEnvelope.FromRawJson(JsonSerializer.Serialize(result, RunnerJson.Options));
     }
+
+    /// <summary>
+    /// Runner 结果转云端分析事件（platform 白名单语义）：
+    /// 编译阶段恒发 compile_result；进入运行阶段再发 run_result；
+    /// REJECTED/INTERNAL_ERROR 属请求级/内部失败（无学习分析价值）不发声学事件。
+    /// </summary>
+    private void EnqueueRunnerTelemetry(RunnerResult result)
+    {
+        if (_telemetry is null)
+        {
+            return;
+        }
+
+        var status = StatusText(result.Status);
+        switch (result.Status)
+        {
+            case RunnerStatus.CompiledOk:
+            case RunnerStatus.CompileFailed:
+                _telemetry.Enqueue(TelemetryEvents.CompileResult(
+                    result.RequestId, status, result.ElapsedMs, result.CompileExitCode,
+                    _deviceId, _componentVersion, result.TraceId));
+                break;
+
+            case RunnerStatus.RunOk:
+            case RunnerStatus.RunFailed:
+            case RunnerStatus.RunTimeout:
+            case RunnerStatus.ResourceLimit:
+                _telemetry.Enqueue(TelemetryEvents.CompileResult(
+                    result.RequestId, StatusText(RunnerStatus.CompiledOk),
+                    result.ElapsedMs, result.CompileExitCode,
+                    _deviceId, _componentVersion, result.TraceId));
+                _telemetry.Enqueue(TelemetryEvents.RunResult(
+                    result.RequestId, status, result.ElapsedMs, result.RunExitCode,
+                    result.PeakMemoryKb, result.TimedOut,
+                    _deviceId, _componentVersion, result.TraceId));
+                break;
+        }
+    }
+
+    /// <summary>RunnerStatus → 契约大写下划线字符串（与 runner.schema.json 对齐）。</summary>
+    private static string StatusText(RunnerStatus status) => status switch
+    {
+        RunnerStatus.CompiledOk => "COMPILED_OK",
+        RunnerStatus.CompileFailed => "COMPILE_FAILED",
+        RunnerStatus.RunOk => "RUN_OK",
+        RunnerStatus.RunFailed => "RUN_FAILED",
+        RunnerStatus.RunTimeout => "RUN_TIMEOUT",
+        RunnerStatus.ResourceLimit => "RESOURCE_LIMIT",
+        RunnerStatus.InternalError => "INTERNAL_ERROR",
+        RunnerStatus.Rejected => "REJECTED",
+        _ => status.ToString(),
+    };
 
     private static ResponseEnvelope Error(string code, string message, string? traceId) =>
         ResponseEnvelope.FromError(ErrorEnvelope.Create(code, message, traceId));
