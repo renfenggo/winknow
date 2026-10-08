@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Extensions.Configuration;
@@ -96,6 +97,8 @@ internal sealed class Worker : BackgroundService
         ApplySelfProtection();
 
         // 1. 加载策略文件（单一可信源：白名单/高风险黑名单/网络/USB 均来自此）
+        // P0 生产收紧（2026-10-07）：生产环境（Policy:Environment / DOTNET_ENVIRONMENT
+        // 非 Development）必须提供正式公钥且策略验签通过，否则拒绝启用管控（fail-closed）。
         var policyPath = paths.ActivePolicy;
         if (File.Exists(policyPath))
         {
@@ -110,7 +113,25 @@ internal sealed class Worker : BackgroundService
             else
             {
                 _logger?.LogError("Failed to load policy: {Error}", policyResult.ErrorMessage);
+                if (!PolicyAllowsDevKey())
+                {
+                    _logger?.LogCritical(
+                        "Production environment: refusing to start control service " +
+                        "without a verifiable signed policy (fail-closed)");
+                    _instanceGuard?.Dispose();
+                    _instanceGuard = null;
+                    return;
+                }
             }
+        }
+        else if (!PolicyAllowsDevKey())
+        {
+            _logger?.LogCritical(
+                "Production environment: active policy file missing at {Path}; " +
+                "refusing to start control service (fail-closed)", policyPath);
+            _instanceGuard?.Dispose();
+            _instanceGuard = null;
+            return;
         }
         else
         {
@@ -627,11 +648,52 @@ internal sealed class Worker : BackgroundService
     /// <summary>
     /// R04：可信策略加载——强制真实验签，公钥来自 PolicyTrustAnchor
     /// （配置 Policy:PublicKeyXml / 环境变量 / 内置 dev 公钥）。
+    /// P0 生产收紧：生产环境缺正式公钥 → InvalidConfiguration（fail-closed）。
     /// </summary>
     private Result<PolicyFile> LoadPolicyTrusted(PolicyLoader loader, string path)
     {
-        using var publicKey = PolicyTrustAnchor.CreatePublicKey(_configuration["Policy:PublicKeyXml"]);
+        using var publicKey = CreatePolicyPublicKey();
+        if (publicKey is null)
+        {
+            return Result<PolicyFile>.Failure(
+                ErrorCode.InvalidConfiguration,
+                "production environment requires an official policy public key " +
+                "(Policy:PublicKeyXml or WINKNOW_POLICY_PUBLIC_KEY_XML); dev fallback disabled");
+        }
         return loader.Load(path, validateSignature: true, publicKey);
+    }
+
+    /// <summary>
+    /// 构建策略验签公钥；生产环境缺正式公钥时返回 null（调用方 fail-closed），
+    /// 不向调用方抛异常（ApplyPolicy/RestorePolicy 走 Result 失败路径）。
+    /// </summary>
+    private RSA? CreatePolicyPublicKey()
+    {
+        try
+        {
+            return PolicyTrustAnchor.CreatePublicKey(
+                _configuration["Policy:PublicKeyXml"],
+                allowDevKeyFallback: PolicyAllowsDevKey());
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger?.LogCritical(ex, "Policy trust anchor rejected: {Message}", ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 策略验签是否允许回落 dev 公钥（P0 生产收紧）：
+    /// Policy:Environment / Environment 配置或 DOTNET_ENVIRONMENT 为空或
+    /// "Development" 时允许（开发机兼容）；显式标注其他环境一律要求正式公钥。
+    /// </summary>
+    private bool PolicyAllowsDevKey()
+    {
+        var env = _configuration["Policy:Environment"]
+            ?? _configuration["Environment"]
+            ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        return string.IsNullOrWhiteSpace(env)
+            || env.Equals("Development", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

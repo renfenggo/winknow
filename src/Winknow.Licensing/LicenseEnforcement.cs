@@ -28,6 +28,7 @@ public sealed class LicenseEnforcement
 
     private LicenseEnforcementStatus _currentStatus = LicenseEnforcementStatus.Online;
     private DateTime _lastCheckTime = DateTime.MinValue;
+    private readonly bool _rejectAllTokens;
 
     /// <summary>当前授权状态。</summary>
     public LicenseEnforcementStatus CurrentStatus => _currentStatus;
@@ -41,16 +42,20 @@ public sealed class LicenseEnforcement
     /// <param name="client">授权客户端。</param>
     /// <param name="offlineGraceStore">离线宽限存储。</param>
     /// <param name="logger">可选的日志记录器。</param>
-    /// <param name="tokenPublicKey">令牌验签公钥（生产装配必须注入；未注入时仅退化为过期检查并告警）。</param>
+    /// <param name="tokenPublicKey">令牌验签公钥（生产装配必须注入）。</param>
     /// <param name="deviceId">本机设备标识（非空时令牌不得跨设备重放）。</param>
     /// <param name="maintenancePasswordHash">维护密码 Argon2id 哈希（MaintenancePassword.Hash 输出；未配置则固定解锁不可用）。</param>
+    /// <param name="isProduction">生产模式（默认 false）：true 且未注入公钥时
+    /// 拒绝启用授权——所有令牌一律不可接受（fail-closed），设备进入锁定路径。
+    /// 仅开发/测试环境允许无公钥退化为仅过期检查（构造告警）。</param>
     public LicenseEnforcement(
         DeviceLicenseClient client,
         OfflineGraceStore offlineGraceStore,
         ILogger<LicenseEnforcement>? logger = null,
         RSA? tokenPublicKey = null,
         string deviceId = "",
-        string? maintenancePasswordHash = null)
+        string? maintenancePasswordHash = null,
+        bool isProduction = false)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _offlineGraceStore = offlineGraceStore ?? throw new ArgumentNullException(nameof(offlineGraceStore));
@@ -61,8 +66,20 @@ public sealed class LicenseEnforcement
 
         if (_tokenPublicKey is null)
         {
-            _logger?.LogWarning(
-                "License token signature verification disabled (no public key configured)");
+            if (isProduction)
+            {
+                // P0 生产收紧（2026-10-07）：缺少正式公钥时拒绝启用授权——
+                // 未验签令牌一律不接受（在线/离线宽限全部失效，锁定待维护解锁）。
+                _rejectAllTokens = true;
+                _logger?.LogError(
+                    "Production mode: license token public key missing; " +
+                    "authorization disabled (all tokens rejected, fail-closed)");
+            }
+            else
+            {
+                _logger?.LogWarning(
+                    "License token signature verification disabled (no public key configured)");
+            }
         }
     }
 
@@ -136,10 +153,13 @@ public sealed class LicenseEnforcement
 
     /// <summary>
     /// 令牌可接受性判定（R04）：未过期 +（配置公钥时）验签通过 +
-    /// （配置本机标识时）设备匹配。公钥未配置时退化为仅过期检查（装配告警）。
+    /// （配置本机标识时）设备匹配。公钥未配置时退化为仅过期检查（装配告警）；
+    /// 生产模式缺公钥（P0 收紧）时一律拒绝。
     /// </summary>
     private bool TokenAcceptable(LicenseToken token)
     {
+        if (_rejectAllTokens)
+            return false;
         if (token.IsExpired)
             return false;
 

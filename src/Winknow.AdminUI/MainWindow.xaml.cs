@@ -41,12 +41,48 @@ public partial class MainWindow : Window
         // 初始化授权服务器和日志
         _loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
         var licenseLogger = _loggerFactory.CreateLogger<Winknow.Licensing.TeacherLicenseServer>();
-        _licenseServer = new TeacherLicenseServer(licenseLogger);
+        _licenseServer = new TeacherLicenseServer(licenseLogger, signingKey: LoadSigningKey());
 
         // 初始化课堂总览页面
         var classroomLogger = _loggerFactory.CreateLogger<Winknow.AdminUI.ClassroomPage>();
         var classroomPage = new ClassroomPage(_licenseServer, classroomLogger);
         ClassroomTabItem.Content = classroomPage;
+    }
+
+    /// <summary>
+    /// 教师端授权签发密钥装配（P0，2026-10-07）：
+    /// 环境变量 WINKNOW_LICENSE_SIGNING_KEY_XML（私钥 XML）优先，
+    /// 其次可执行文件同目录 signing_key.xml 文件；均未提供时返回 null
+    /// ——TeacherLicenseServer 保持 fail-closed（未配钥拒绝签发）。
+    /// 正式密钥仅在生产部署时注入，开发环境不携带。
+    /// </summary>
+    private static System.Security.Cryptography.RSA? LoadSigningKey()
+    {
+        var xml = Environment.GetEnvironmentVariable("WINKNOW_LICENSE_SIGNING_KEY_XML");
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            var keyFile = Path.Combine(
+                AppContext.BaseDirectory, "signing_key.xml");
+            if (File.Exists(keyFile))
+            {
+                xml = File.ReadAllText(keyFile);
+            }
+        }
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return null;
+        }
+        try
+        {
+            var rsa = System.Security.Cryptography.RSA.Create();
+            rsa.FromXmlString(xml);
+            return rsa;
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            // 密钥文件损坏：按未配置处理（fail-closed），不中断 UI 启动。
+            return null;
+        }
     }
 
     private void OnEnterMaintenanceClick(object sender, RoutedEventArgs e)

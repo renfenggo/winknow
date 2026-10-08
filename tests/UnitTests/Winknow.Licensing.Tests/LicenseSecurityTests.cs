@@ -194,13 +194,15 @@ public sealed class LicenseEnforcementTests : IDisposable
         StubProvider provider,
         RSA? publicKey = null,
         string deviceId = "",
-        string? maintenanceHash = null)
+        string? maintenanceHash = null,
+        bool isProduction = false)
         => new(
             new DeviceLicenseClient(provider, deviceId),
             new OfflineGraceStore(_gracePath),
             tokenPublicKey: publicKey,
             deviceId: deviceId,
-            maintenancePasswordHash: maintenanceHash);
+            maintenancePasswordHash: maintenanceHash,
+            isProduction: isProduction);
 
     [Fact(DisplayName = "任意八位密码不再放行（旧缺陷：长度>=8 即通过）")]
     public void FixedCode_ArbitraryLength8_Rejected()
@@ -284,5 +286,23 @@ public sealed class LicenseEnforcementTests : IDisposable
         var status = await enforcement.CheckStatusAsync();
 
         Assert.Equal(LicenseEnforcementStatus.Online, status);
+    }
+
+    [Fact(DisplayName = "P0 生产缺正式公钥：合法签名令牌也拒绝（fail-closed 锁定）")]
+    public async Task Production_WithoutPublicKey_LocksDown()
+    {
+        // 即使签发方密钥正确、令牌未过期且设备匹配：生产模式未注入验签公钥
+        // 时一律拒绝（旧缺陷：退化为仅过期检查，伪签名令牌可上线）。
+        var token = LicenseToken.Sign(
+            LicenseToken.Create("device-001", validityMinutes: 30), _issuerKey);
+        var enforcement = Create(
+            new StubProvider { NextToken = token },
+            publicKey: null,
+            deviceId: "device-001",
+            isProduction: true);
+
+        var status = await enforcement.CheckStatusAsync();
+
+        Assert.Equal(LicenseEnforcementStatus.Locked, status);
     }
 }

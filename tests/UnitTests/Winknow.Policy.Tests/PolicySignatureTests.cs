@@ -260,4 +260,74 @@ public class PolicySignatureTests : IDisposable
         Assert.True(result.IsSuccess, result.ErrorMessage);
         Assert.Equal("default-classroom-v1", result.Data!.PolicyId);
     }
+
+    // ------------------------------------------------------------------
+    // P0 生产收紧（2026-10-07）：生产禁止回退 dev 公钥，缺正式公钥拒绝启用管控
+    // ------------------------------------------------------------------
+
+    [Fact(DisplayName = "生产模式缺正式公钥：信任锚直接拒绝（不回退 dev）")]
+    public void Production_WithoutOfficialKey_Throws()
+    {
+        var original = Environment.GetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar, null);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                PolicyTrustAnchor.CreatePublicKey(null, allowDevKeyFallback: false));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar, original);
+        }
+    }
+
+    [Fact(DisplayName = "生产配正式公钥后：开发钥签名的默认策略被拒绝")]
+    public void DevSignedDefaultPolicy_RejectedUnderOfficialKey()
+    {
+        var policyPath = Path.Combine(
+            AppContext.BaseDirectory, "policies", "default_policy_v7.0.json");
+        if (!File.Exists(policyPath))
+        {
+            return; // 测试环境跳过
+        }
+
+        // _signingKey 充当正式公钥：仓库默认策略为 dev 钥签名 → 验签必败
+        var result = _loader.Load(policyPath, validateSignature: true, publicKey: _signingKey);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ErrorCode.PolicySignatureInvalid, result.ErrorCode);
+    }
+
+    [Fact(DisplayName = "生产模式经环境变量注入正式公钥：导入成功且正式签名策略通过")]
+    public void Production_OfficialKeyFromEnvVar_Works()
+    {
+        var original = Environment.GetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                PolicyTrustAnchor.PublicKeyXmlEnvVar, _signingKey.ToXmlString(false));
+
+            using var publicKey = PolicyTrustAnchor.CreatePublicKey(null, allowDevKeyFallback: false);
+            var policy = SamplePolicy();
+            var signed = new PolicyFile
+            {
+                Version = policy.Version,
+                PolicyId = policy.PolicyId,
+                CreatedAt = policy.CreatedAt,
+                Description = policy.Description,
+                SoftwareControl = policy.SoftwareControl,
+                Signature = PolicySigner.Sign(policy, _signingKey)
+            };
+            var path = WritePolicy(signed, Camel);
+
+            var result = _loader.Load(path, validateSignature: true, publicKey);
+
+            Assert.True(result.IsSuccess, result.ErrorMessage);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar, original);
+        }
+    }
 }

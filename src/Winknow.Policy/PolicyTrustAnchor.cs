@@ -7,8 +7,11 @@ namespace Winknow.Policy;
 ///
 /// - 内置 dev 公钥与 tools/policy-signing/dev_private_key.xml 成对，
 ///   仅用于开发/测试与默认策略签名（私钥入库仅为 dev 对，生产必须换钥）。
-/// - 生产部署通过环境变量 WINKNOW_POLICY_PUBLIC_KEY_XML 注入正式公钥
-///   （XML 格式，与 RSA.ToXmlString(false) 输出一致）。
+/// - 生产部署通过环境变量 WINKNOW_POLICY_PUBLIC_KEY_XML 或配置
+///   Policy:PublicKeyXml 注入正式公钥（XML 格式，RSA.ToXmlString(false)）。
+/// - 生产收紧（P0，2026-10-07）：allowDevKeyFallback=false 时禁止回落
+///   dev 公钥——缺少正式公钥直接抛异常（fail-closed），由 Worker 转为
+///   "拒绝启用管控"，杜绝生产环境用开发钥签名的策略通过验签。
 /// </summary>
 public static class PolicyTrustAnchor
 {
@@ -20,17 +23,34 @@ public static class PolicyTrustAnchor
     public const string PublicKeyXmlEnvVar = "WINKNOW_POLICY_PUBLIC_KEY_XML";
 
     /// <summary>
-    /// 构建验签公钥：显式 XML 优先，其次环境变量，最后回落 dev 公钥。
+    /// 构建验签公钥：显式 XML 优先，其次环境变量；
+    /// 两者皆缺时按 <paramref name="allowDevKeyFallback"/> 决定是否回落 dev 公钥
+    /// （生产必须传 false——缺正式公钥即抛异常，不静默降级）。
     /// </summary>
     /// <param name="publicKeyXml">显式公钥 XML（可为 null）。</param>
+    /// <param name="allowDevKeyFallback">是否允许回落内置 dev 公钥（仅开发环境）。</param>
     /// <returns>RSA 公钥实例（调用方负责释放）。</returns>
-    public static RSA CreatePublicKey(string? publicKeyXml = null)
+    /// <exception cref="InvalidOperationException">
+    /// allowDevKeyFallback=false 且未提供任何正式公钥（显式 XML 与环境变量均缺）。
+    /// </exception>
+    public static RSA CreatePublicKey(string? publicKeyXml = null, bool allowDevKeyFallback = true)
     {
+        var fromEnv = Environment.GetEnvironmentVariable(PublicKeyXmlEnvVar);
         var xml = !string.IsNullOrWhiteSpace(publicKeyXml)
             ? publicKeyXml
-            : Environment.GetEnvironmentVariable(PublicKeyXmlEnvVar) is { Length: > 0 } fromEnv
+            : !string.IsNullOrWhiteSpace(fromEnv)
                 ? fromEnv
-                : DevPublicKeyXml;
+                : null;
+        if (xml is null)
+        {
+            if (!allowDevKeyFallback)
+            {
+                throw new InvalidOperationException(
+                    $"production policy verification requires an official public key: " +
+                    $"set Policy:PublicKeyXml or {PublicKeyXmlEnvVar}; dev fallback is disabled");
+            }
+            xml = DevPublicKeyXml;
+        }
         var rsa = RSA.Create();
         rsa.FromXmlString(xml);
         return rsa;
