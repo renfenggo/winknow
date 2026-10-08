@@ -31,4 +31,22 @@ jobs:
         run: dotnet build WinknowV7.sln --configuration Release --no-restore --nologo
 
       - name: Test (Release)
-        run: dotnet test WinknowV7.sln --configuration Release --no-build --nologo
+        # CI 首跑修正（2026-10-08）：本地 Release 741/741 全绿但 CI 失败且日志需登录才能看。
+        # 失败的测试名以 ::error:: workflow command 输出——转为 check annotation 后可经
+        # 公开 API 读取，无需认证即可定位失败用例（annotations 上限 10 条，截断 200 字符）。
+        shell: pwsh
+        run: |
+          dotnet test WinknowV7.sln --configuration Release --no-build --nologo 2>&1 |
+            ForEach-Object { "$_" } | Tee-Object -FilePath test-output.log
+          $code = $LASTEXITCODE
+          $failed = Select-String -Path test-output.log -Pattern '(^\s*(失败|Failed)\s+\S+)|(\[FAIL\])' |
+            Select-Object -First 10
+          foreach ($f in $failed) {
+            $m = $f.Line.Trim()
+            if ($m.Length -gt 200) { $m = $m.Substring(0, 200) }
+            Write-Host "::error::$m"
+          }
+          if ($code -ne 0 -and $failed.Count -eq 0) {
+            Write-Host "::error::dotnet test exit $code without parsed test names - inspect raw log"
+          }
+          exit $code
