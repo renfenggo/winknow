@@ -100,6 +100,51 @@ public sealed class ArchitectureTests
         Assert.DoesNotContain("CreateProcessAsUser", content, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// N05（2026-10-08 第二轮复核）：ApplyPolicyToExecutors 必须检查
+    /// ProxyGuard.CheckAndRestore / DnsMonitor.Check 的 Result 与
+    /// UsbStorageController.Enable / Disable 的 bool 返回值，失败进
+    /// apply_errors——丢弃返回值会以空错误清单 + applied=true 掩盖
+    /// "执行器未生效"（如注册表被锁、DNS 违规未纠正）。
+    ///
+    /// Worker.ApplyPolicyToExecutors 直接单测会真改注册表/DNS/hosts，
+    /// 无法在 CI 执行——用源码文本断言钉住装配层检查逻辑
+    /// （先例：ControlServiceWorker_ShouldNotDirectlyCallCreateProcessAsUser）；
+    /// 执行器各自的失败语义由其单元测试覆盖。
+    /// </summary>
+    [Fact]
+    public void ControlServiceWorker_ShouldCheckExecutorReturnValuesInApplyPolicy()
+    {
+        var workerPath = Path.Combine(RepoRoot, "src", "Winknow.ControlService", "Worker.cs");
+        var content = File.ReadAllText(workerPath);
+
+        // 返回值已被检查且失败进 errors（ApplyPolicyToExecutors）。
+        Assert.Contains("var proxyCheck = _proxyGuard.CheckAndRestore();", content, StringComparison.Ordinal);
+        Assert.Contains("!proxyCheck.IsSuccess", content, StringComparison.Ordinal);
+        Assert.Contains("var dnsCheck = _dnsMonitor.Check();", content, StringComparison.Ordinal);
+        Assert.Contains("!dnsCheck.IsSuccess", content, StringComparison.Ordinal);
+        Assert.Contains("!_usbController.Enable()", content, StringComparison.Ordinal);
+        Assert.Contains("!_usbController.Disable()", content, StringComparison.Ordinal);
+        Assert.Contains("errors.Add(\"usb_controller: Enable() failed", content, StringComparison.Ordinal);
+        Assert.Contains("errors.Add(\"usb_controller: Disable() failed", content, StringComparison.Ordinal);
+
+        // 启动路径（ExecuteAsync 初始化）同样检查返回值，失败 LogError 如实记录。
+        Assert.Contains("var dnsStartupCheck = _dnsMonitor.Check();", content, StringComparison.Ordinal);
+        Assert.Contains("DNS monitor initial check failed", content, StringComparison.Ordinal);
+        Assert.Contains("Disable() failed on startup", content, StringComparison.Ordinal);
+        Assert.Contains("Enable() failed on startup", content, StringComparison.Ordinal);
+
+        // 不存在丢弃返回值的裸调用（去掉已检查的赋值语句后应零残留）。
+        var withoutChecked = content
+            .Replace("var proxyCheck = _proxyGuard.CheckAndRestore();", string.Empty, StringComparison.Ordinal)
+            .Replace("var dnsCheck = _dnsMonitor.Check();", string.Empty, StringComparison.Ordinal)
+            .Replace("var dnsStartupCheck = _dnsMonitor.Check();", string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("_proxyGuard.CheckAndRestore();", withoutChecked, StringComparison.Ordinal);
+        Assert.DoesNotContain("_dnsMonitor.Check();", withoutChecked, StringComparison.Ordinal);
+        Assert.DoesNotContain("_usbController.Enable();", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("_usbController.Disable();", content, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("global.json")]
     [InlineData("Directory.Build.props")]

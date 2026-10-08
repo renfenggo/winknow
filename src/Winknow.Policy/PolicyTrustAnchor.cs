@@ -26,12 +26,17 @@ public static class PolicyTrustAnchor
     /// 构建验签公钥：显式 XML 优先，其次环境变量；
     /// 两者皆缺时按 <paramref name="allowDevKeyFallback"/> 决定是否回落 dev 公钥
     /// （生产必须传 false——缺正式公钥即抛异常，不静默降级）。
+    ///
+    /// N01（2026-10-08 第二轮复核）：<paramref name="allowDevKeyFallback"/>=false
+    /// 时，解析出的公钥若即内置 dev 公钥本身（显式 XML 或环境变量配置了
+    /// 开发钥）同样抛异常——"配置了钥匙"不等于"配了正确的钥匙"。
     /// </summary>
     /// <param name="publicKeyXml">显式公钥 XML（可为 null）。</param>
     /// <param name="allowDevKeyFallback">是否允许回落内置 dev 公钥（仅开发环境）。</param>
     /// <returns>RSA 公钥实例（调用方负责释放）。</returns>
     /// <exception cref="InvalidOperationException">
-    /// allowDevKeyFallback=false 且未提供任何正式公钥（显式 XML 与环境变量均缺）。
+    /// allowDevKeyFallback=false 且未提供任何正式公钥（显式 XML 与环境变量均缺），
+    /// 或提供的公钥即内置 dev 公钥。
     /// </exception>
     public static RSA CreatePublicKey(string? publicKeyXml = null, bool allowDevKeyFallback = true)
     {
@@ -51,8 +56,38 @@ public static class PolicyTrustAnchor
             }
             xml = DevPublicKeyXml;
         }
+        else if (!allowDevKeyFallback && IsDevelopmentPublicKey(xml))
+        {
+            throw new InvalidOperationException(
+                "production policy verification must not use the built-in development " +
+                $"public key; configure an official key via Policy:PublicKeyXml or {PublicKeyXmlEnvVar}");
+        }
         var rsa = RSA.Create();
         rsa.FromXmlString(xml);
         return rsa;
+    }
+
+    /// <summary>
+    /// 判断给定公钥 XML 是否即内置 dev 公钥（按 RSA 参数比较，容忍 XML
+    /// 空白/格式差异）。非法 XML 返回 false——解析失败交由调用方的
+    /// FromXmlString 如实抛出，不在此吞掉。
+    /// </summary>
+    public static bool IsDevelopmentPublicKey(string publicKeyXml)
+    {
+        using var candidate = RSA.Create();
+        try
+        {
+            candidate.FromXmlString(publicKeyXml);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+        using var dev = RSA.Create();
+        dev.FromXmlString(DevPublicKeyXml);
+        var candidateParams = candidate.ExportParameters(false);
+        var devParams = dev.ExportParameters(false);
+        return candidateParams.Modulus.AsSpan().SequenceEqual(devParams.Modulus.AsSpan())
+            && candidateParams.Exponent.AsSpan().SequenceEqual(devParams.Exponent.AsSpan());
     }
 }

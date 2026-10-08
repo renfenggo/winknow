@@ -75,15 +75,28 @@ internal sealed class Worker : BackgroundService
     private WtsSessionMonitor? _wtsMonitor;
     private TelemetryRuntime? _telemetry;
 
-    internal Worker(
-        ILogger<Worker> logger, ILoggerFactory loggerFactory, IConfiguration configuration)
+    /// <summary>
+    /// N01（2026-10-08 第二轮复核）：构造改 public 并注入 IHostEnvironment。
+    /// 此前 internal 构造在 DI CallSiteFactory 只枚举 public 构造的约束下
+    /// 无法被 host 激活（服务从未真实过 AddHostedService 路径）；public
+    /// 构造不破坏 internal sealed 类的封装。宿主环境为权威环境事实来源。
+    /// </summary>
+    public Worker(
+        ILogger<Worker> logger,
+        ILoggerFactory loggerFactory,
+        IConfiguration configuration,
+        IHostEnvironment? hostEnvironment = null)
     {
         _logger = logger;
         _loggerFactory = loggerFactory;
         _configuration = configuration;
+        _hostEnvironment = hostEnvironment;
     }
 
     private readonly IConfiguration _configuration;
+
+    /// <summary>宿主注入的权威环境（Host.CreateApplicationBuilder 已注册；测试可注入 fake）。</summary>
+    private readonly IHostEnvironment? _hostEnvironment;
 
     /// <summary>云端遥测运行时句柄（null = 未配置 BaseUrl，遥测整体禁用）。</summary>
     private sealed record TelemetryRuntime(
@@ -113,8 +126,9 @@ internal sealed class Worker : BackgroundService
         ApplySelfProtection();
 
         // 1. 加载策略文件（单一可信源：白名单/高风险黑名单/网络/USB 均来自此）
-        // P0 生产收紧（2026-10-07）：生产环境（Policy:Environment / DOTNET_ENVIRONMENT
-        // 非 Development）必须提供正式公钥且策略验签通过，否则拒绝启用管控（fail-closed）。
+        // P0 生产收紧（2026-10-07）+ N01（2026-10-08 第二轮复核）：以宿主
+        // IHostEnvironment 为权威环境（缺省 Production）；非 Development 环境
+        // 必须提供正式公钥且策略验签通过，否则拒绝启用管控（fail-closed）。
         var policyPath = paths.ActivePolicy;
         if (File.Exists(policyPath))
         {
@@ -357,7 +371,11 @@ internal sealed class Worker : BackgroundService
             _dnsMonitor = new DnsMonitor(
                 _policy.NetworkControl.Dns,
                 _loggerFactory.CreateLogger<DnsMonitor>());
-            _dnsMonitor.Check();
+            var dnsStartupCheck = _dnsMonitor.Check();
+            if (!dnsStartupCheck.IsSuccess)
+            {
+                _logger?.LogError("DNS monitor initial check failed: {Error}", dnsStartupCheck.ErrorMessage);
+            }
             _logger?.LogInformation("DNS monitor initialized");
 
             _browserPolicyEnforcer = new BrowserPolicyEnforcer(
@@ -391,13 +409,25 @@ internal sealed class Worker : BackgroundService
             _usbController = new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
             if (!_policy.UsbControl.MassStorage.Enabled)
             {
-                _usbController.Disable();
-                _logger?.LogWarning("USB Mass Storage disabled by policy");
+                if (!_usbController.Disable())
+                {
+                    _logger?.LogError("USB Mass Storage Disable() failed on startup (registry write rejected)");
+                }
+                else
+                {
+                    _logger?.LogWarning("USB Mass Storage disabled by policy");
+                }
             }
             else
             {
-                _usbController.Enable();
-                _logger?.LogInformation("USB Mass Storage enabled by policy");
+                if (!_usbController.Enable())
+                {
+                    _logger?.LogError("USB Mass Storage Enable() failed on startup (registry write rejected)");
+                }
+                else
+                {
+                    _logger?.LogInformation("USB Mass Storage enabled by policy");
+                }
             }
         }
 
@@ -663,8 +693,9 @@ internal sealed class Worker : BackgroundService
 
     /// <summary>
     /// R04：可信策略加载——强制真实验签，公钥来自 PolicyTrustAnchor
-    /// （配置 Policy:PublicKeyXml / 环境变量 / 内置 dev 公钥）。
+    /// （配置 Policy:PublicKeyXml / 环境变量 / 开发环境回落内置 dev 公钥）。
     /// P0 生产收紧：生产环境缺正式公钥 → InvalidConfiguration（fail-closed）。
+    /// N01：生产环境显式配置 dev 公钥本身同样被拒绝（见 PolicyTrustAnchor）。
     /// </summary>
     private Result<PolicyFile> LoadPolicyTrusted(PolicyLoader loader, string path)
     {
@@ -699,18 +730,26 @@ internal sealed class Worker : BackgroundService
     }
 
     /// <summary>
-    /// 策略验签是否允许回落 dev 公钥（P0 生产收紧）：
-    /// Policy:Environment / Environment 配置或 DOTNET_ENVIRONMENT 为空或
-    /// "Development" 时允许（开发机兼容）；显式标注其他环境一律要求正式公钥。
+    /// N01（2026-10-08 第二轮复核）：dev 公钥回落的权威判定。
+    ///
+    /// 旧实现用 Policy:Environment / Environment / DOTNET_ENVIRONMENT 三源
+    /// 自判且"缺省当开发"——而宿主（Host.CreateApplicationBuilder）缺省环境
+    /// 是 Production：装了就跑的服务在零配置下以开发公钥验签生产策略。
+    /// 现在以宿主注入的 IHostEnvironment 为唯一事实来源：仅显式
+    /// Development 允许回落；未注入（null，保守起见）或任何其他环境
+    /// （Production/Staging/自定义）一律要求正式公钥。开发机便利由
+    /// launchSettings 显式 DOTNET_ENVIRONMENT=Development 提供，不再依赖
+    /// "缺省即开发"。
     /// </summary>
-    private bool PolicyAllowsDevKey()
+    internal static bool AllowsDevKey(IHostEnvironment? hostEnvironment)
     {
-        var env = _configuration["Policy:Environment"]
-            ?? _configuration["Environment"]
-            ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
-        return string.IsNullOrWhiteSpace(env)
-            || env.Equals("Development", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(
+            hostEnvironment?.EnvironmentName,
+            "Development",
+            StringComparison.OrdinalIgnoreCase);
     }
+
+    private bool PolicyAllowsDevKey() => AllowsDevKey(_hostEnvironment);
 
     /// <summary>
     /// 从备份恢复策略并重载，随后同步应用到运行中的执行器（policy.restore 后端）。
@@ -812,6 +851,8 @@ internal sealed class Worker : BackgroundService
         }
 
         // 4. 代理守卫：更新策略并立即恢复一次（新禁用策略即时生效）
+        // N05（2026-10-08 第二轮复核）：CheckAndRestore 返回 Result——
+        // 恢复失败（注册表被占/权限等）必须进 apply_errors，不得只吞异常。
         try
         {
             if (_proxyGuard is null)
@@ -826,7 +867,11 @@ internal sealed class Worker : BackgroundService
                 _proxyGuard.UpdatePolicy(policy.NetworkControl.Proxy);
             }
 
-            _proxyGuard.CheckAndRestore();
+            var proxyCheck = _proxyGuard.CheckAndRestore();
+            if (!proxyCheck.IsSuccess)
+            {
+                errors.Add($"proxy_guard: {proxyCheck.ErrorMessage}");
+            }
         }
         catch (Exception ex)
         {
@@ -834,6 +879,8 @@ internal sealed class Worker : BackgroundService
         }
 
         // 5. DNS 监控：更新策略并立即检查一次
+        // N05：Check 返回 Result——检测到违规 DNS（InvalidConfiguration）
+        // 或检查异常（Unknown）都进 apply_errors。
         try
         {
             if (_dnsMonitor is null)
@@ -847,7 +894,11 @@ internal sealed class Worker : BackgroundService
                 _dnsMonitor.UpdatePolicy(policy.NetworkControl.Dns);
             }
 
-            _dnsMonitor.Check();
+            var dnsCheck = _dnsMonitor.Check();
+            if (!dnsCheck.IsSuccess)
+            {
+                errors.Add($"dns_monitor: {dnsCheck.ErrorMessage}");
+            }
         }
         catch (Exception ex)
         {
@@ -917,17 +968,29 @@ internal sealed class Worker : BackgroundService
         }
 
         // 9. USB 存储管控
+        // N05：Enable/Disable 返回 bool——注册表写失败（权限/键被锁）时
+        // 策略未生效，必须进 apply_errors（此前失败返回 false 被丢弃，
+        // 空错误清单 + applied=true 掩盖了未生效事实）。
         try
         {
             _usbController ??= new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
             if (policy.UsbControl.MassStorage.Enabled)
             {
-                _usbController.Enable();
+                if (!_usbController.Enable())
+                {
+                    errors.Add("usb_controller: Enable() failed (registry write rejected)");
+                }
             }
             else
             {
-                _usbController.Disable();
-                _logger?.LogWarning("USB Mass Storage disabled by policy");
+                if (!_usbController.Disable())
+                {
+                    errors.Add("usb_controller: Disable() failed (registry write rejected)");
+                }
+                else
+                {
+                    _logger?.LogWarning("USB Mass Storage disabled by policy");
+                }
             }
         }
         catch (Exception ex)

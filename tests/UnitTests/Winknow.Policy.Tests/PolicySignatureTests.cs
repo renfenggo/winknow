@@ -330,4 +330,82 @@ public class PolicySignatureTests : IDisposable
             Environment.SetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar, original);
         }
     }
+
+    // ------------------------------------------------------------------
+    // N01（2026-10-08 第二轮复核）：生产模式拒绝 dev 公钥本身——
+    // 显式 XML / 环境变量配置了开发钥同样 fail-closed
+    // ------------------------------------------------------------------
+
+    [Fact(DisplayName = "N01：生产模式显式配置 dev 公钥 XML → 信任锚拒绝")]
+    public void Production_ExplicitDevKeyXml_Rejected()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            PolicyTrustAnchor.CreatePublicKey(
+                PolicyTrustAnchor.DevPublicKeyXml, allowDevKeyFallback: false));
+    }
+
+    [Fact(DisplayName = "N01：生产模式经环境变量注入 dev 公钥 → 信任锚拒绝")]
+    public void Production_DevKeyFromEnvVar_Rejected()
+    {
+        var original = Environment.GetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                PolicyTrustAnchor.PublicKeyXmlEnvVar, PolicyTrustAnchor.DevPublicKeyXml);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                PolicyTrustAnchor.CreatePublicKey(null, allowDevKeyFallback: false));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar, original);
+        }
+    }
+
+    [Fact(DisplayName = "N01：IsDevelopmentPublicKey 按 RSA 参数识别 dev 钥（容忍 XML 格式差异）")]
+    public void IsDevelopmentPublicKey_ParamComparison()
+    {
+        Assert.True(PolicyTrustAnchor.IsDevelopmentPublicKey(PolicyTrustAnchor.DevPublicKeyXml));
+
+        // 同一钥重新序列化（空白/格式差异）仍识别为 dev。
+        using var dev = RSA.Create();
+        dev.FromXmlString(PolicyTrustAnchor.DevPublicKeyXml);
+        Assert.True(PolicyTrustAnchor.IsDevelopmentPublicKey(dev.ToXmlString(false)));
+
+        // 正式钥与非法 XML 不是 dev 钥。
+        Assert.False(PolicyTrustAnchor.IsDevelopmentPublicKey(_signingKey.ToXmlString(false)));
+        Assert.False(PolicyTrustAnchor.IsDevelopmentPublicKey("not-a-key"));
+    }
+
+    [Fact(DisplayName = "N01：生产模式显式配置正式公钥 → 接受且验签通过")]
+    public void Production_OfficialExplicitXml_Accepted()
+    {
+        var original = Environment.GetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar, null);
+            using var publicKey = PolicyTrustAnchor.CreatePublicKey(
+                _signingKey.ToXmlString(false), allowDevKeyFallback: false);
+
+            var policy = SamplePolicy();
+            var signed = new PolicyFile
+            {
+                Version = policy.Version,
+                PolicyId = policy.PolicyId,
+                CreatedAt = policy.CreatedAt,
+                Description = policy.Description,
+                SoftwareControl = policy.SoftwareControl,
+                Signature = PolicySigner.Sign(policy, _signingKey)
+            };
+            var path = WritePolicy(signed, Camel);
+
+            var result = _loader.Load(path, validateSignature: true, publicKey);
+
+            Assert.True(result.IsSuccess, result.ErrorMessage);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(PolicyTrustAnchor.PublicKeyXmlEnvVar, original);
+        }
+    }
 }

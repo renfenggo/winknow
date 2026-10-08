@@ -199,6 +199,15 @@ if ($FlutterBuildRoot) {
     $appDir = Join-Path $OutputRoot 'app'
     New-Item -ItemType Directory -Force -Path $appDir | Out-Null
     Copy-Item (Join-Path $FlutterBuildRoot '*') $appDir -Recurse -Force
+    $script:FlutterClientIncluded = $true
+}
+else {
+    # N07（2026-10-08 第二轮复核）：本通道产出的是"服务组件单独发行"——
+    # 含 ControlService/Guard/Bridge，不含算法通学生客户端（BLK-001 OPEN，
+    # Flutter symlink 构建阻塞）。必须显式声明产品范围，避免被当作完整融合交付。
+    Write-Warning "产品范围：仅服务端组件（ControlService / Guard / Bridge），不含算法通学生客户端。"
+    Write-Warning "完整融合发行必须提供 -FlutterBuildRoot 注入客户端，并在干净机器完成安装验收。"
+    $script:FlutterClientIncluded = $false
 }
 
 # A public key is required for any signed, distributable release.  It is deliberately
@@ -236,11 +245,16 @@ $entries = foreach ($f in $files) {
     }
 }
 $manifest = [PSCustomObject]@{
-    product   = 'Winknow'
-    version   = '7.0.1'
-    generated = (Get-Date).ToUniversalTime().ToString('o')
-    files     = $entries
+    product         = 'Winknow'
+    version         = '7.0.1'
+    generated       = (Get-Date).ToUniversalTime().ToString('o')
+    # N07：manifest 明示产品范围——服务端恒在；flutter_client 仅在注入后为 true。
+    # 验收方据此区分"服务组件单独发行"与"完整融合交付"。
+    components      = @('server')
+    flutter_client  = [bool]$FlutterClientIncluded
+    files           = $entries
 }
+if ($FlutterClientIncluded) { $manifest.components += 'flutter_client' }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content "$OutputRoot\release_manifest.json" -Encoding utf8
 Write-Host ("清单含 {0} 个文件" -f $entries.Count) -ForegroundColor Green
 

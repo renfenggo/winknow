@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Winknow.ControlService;
 using Winknow.Core.Results;
 using Winknow.Ipc.Commands;
@@ -301,5 +303,65 @@ public sealed class PolicyAndClassroomIpcTests
 
         Assert.False(response.Ok);
         Assert.Equal(IpcErrorCodes.IpcSidNotAuthorized, response.Error!.Code);
+    }
+}
+
+/// <summary>
+/// N01（2026-10-08 第二轮复核）：dev 公钥回落的权威环境判定。
+/// 旧实现三源自判且"缺省当开发"——宿主缺省环境是 Production，装了就跑
+/// 的服务在零配置下用开发公钥验签生产策略。现仅显式 Development 放行。
+/// </summary>
+public sealed class WorkerEnvironmentTrustTests
+{
+    private sealed class FakeHostEnvironment : IHostEnvironment
+    {
+        public string ApplicationName { get; set; } = "test";
+        public string EnvironmentName { get; set; } = "Production";
+        public string ContentRootPath { get; set; } = ".";
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+    }
+
+    private static IHostEnvironment Env(string name) => new FakeHostEnvironment
+    {
+        EnvironmentName = name,
+    };
+
+    [Fact(DisplayName = "N01：显式 Development（含大小写不敏感）允许 dev 公钥回落")]
+    public void AllowsDevKey_Development_True()
+    {
+        Assert.True(Worker.AllowsDevKey(Env("Development")));
+        Assert.True(Worker.AllowsDevKey(Env("development")));
+    }
+
+    [Fact(DisplayName = "N01：Production / Staging / 自定义环境一律拒绝 dev 公钥")]
+    public void AllowsDevKey_NonDevelopment_False()
+    {
+        Assert.False(Worker.AllowsDevKey(Env("Production")));
+        Assert.False(Worker.AllowsDevKey(Env("Staging")));
+        Assert.False(Worker.AllowsDevKey(Env("prod-cn-east")));
+    }
+
+    [Fact(DisplayName = "N01：宿主环境未注入（null）保守拒绝——不再'缺省当开发'")]
+    public void AllowsDevKey_NullHostEnvironment_False()
+    {
+        Assert.False(Worker.AllowsDevKey(null));
+    }
+
+    [Fact(DisplayName = "N01：环境变量/配置伪装不再生效——判定只认 IHostEnvironment")]
+    public void AllowsDevKey_IgnoresConfigurationAndEnvVars()
+    {
+        var original = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        try
+        {
+            // 旧实现的三源自判来源全部指向 Development，权威判定仍应拒绝
+            // （null 宿主环境 → 保守拒绝）。
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", "Development");
+
+            Assert.False(Worker.AllowsDevKey(null));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", original);
+        }
     }
 }
