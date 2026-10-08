@@ -9,7 +9,7 @@ public static class Constants
     public const string ProductName = "Winknow";
 
     /// <summary>Gets the current product version.</summary>
-    public const string Version = "7.0.0";
+    public const string Version = "7.0.1";
 
     /// <summary>Windows service identities. SCM APIs must always use internal names.</summary>
     public static class Services

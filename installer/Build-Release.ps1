@@ -17,7 +17,10 @@ param(
     [string]$CertThumbprint = "",
     [switch]$TestCert,
     # RSA/ECDSA verification public key included with update-capable clients. Never pass a private key here.
-    [string]$PublicKeyPath = ""
+    [string]$PublicKeyPath = "",
+    # Flutter 客户端预构建目录（suanfatong: build\windows\x64\runner\Release）→ payload\app
+    # BLK-001（Windows 开发者模式）阻塞本机构建时，可从其他机器拷贝 Release 目录后传入
+    [string]$FlutterBuildRoot = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,12 +35,14 @@ if (-not [IO.Path]::IsPathRooted($OutputRoot)) {
 
 $targets = @(
     # (项目, payload 子目录)  服务 → services；更新器 → updater；控制台 → admin
+    # 桌面桥接器 → bridge（iss 装到 {app} 根，算法通客户端固定路径探测）
     @{ Project = 'Winknow.ControlService'; Out = 'services' },
     @{ Project = 'Winknow.GuardService';   Out = 'services' },
     @{ Project = 'Winknow.TrustedUpdater'; Out = 'updater' },
     @{ Project = 'Winknow.AdminUI';        Out = 'admin' },
     @{ Project = 'Winknow.SessionAgent';   Out = 'agent' },
-    @{ Project = 'Winknow.RecoveryTool';   Out = 'tools' }
+    @{ Project = 'Winknow.RecoveryTool';   Out = 'tools' },
+    @{ Project = 'Winknow.DesktopBridge';  Out = 'bridge' }
 )
 
 function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
@@ -70,8 +75,9 @@ if (-not $SkipObfuscation) {
     # 检查 Obfuscar 是否已安装
     $obfuscarExe = Get-Command obfuscar.console -ErrorAction SilentlyContinue
     if (-not $obfuscarExe) {
-        # 尝试全局查找
-        $obfuscarExe = where.exe obfuscar.console 2>$null
+        # 尝试全局查找（cmd /c 吞 stderr：PS5.1 + EAP=Stop 下 where.exe 2>$null 的
+        # "INFO: Could not find" 会以 NativeCommandError 终止脚本）
+        $obfuscarExe = cmd /c "where obfuscar.console 2>nul"
     }
     
     if (-not $obfuscarExe) {
@@ -91,25 +97,33 @@ if (-not $SkipObfuscation) {
         throw "未找到 Obfuscar 配置文件: $obfuscarConfig"
     }
     
-    # 准备混淆工作目录
-    $obfuscatedOutput = Join-Path $OutputRoot 'obfuscated_temp'
-    if (Test-Path $obfuscatedOutput) {
-        Remove-Item -Path $obfuscatedOutput -Recurse -Force
+    # 构造平铺混淆工作区：Obfuscar 仅在 InPath 根目录解析依赖，
+    # payload 的分目录结构（services/admin/agent/updater）会报
+    # "Unable to resolve dependency"，故将全部程序集平铺到 installer\obf_workspace
+    $obfWorkspace = Join-Path $scriptRoot 'obf_workspace'
+    if (Test-Path $obfWorkspace) {
+        Remove-Item -Path $obfWorkspace -Recurse -Force
     }
-    New-Item -ItemType Directory -Force -Path $obfuscatedOutput | Out-Null
-    
-    # 执行混淆
+    New-Item -ItemType Directory -Force -Path $obfWorkspace | Out-Null
+    Get-ChildItem $OutputRoot -Recurse -Include *.dll, *.exe -File |
+        ForEach-Object { Copy-Item $_.FullName (Join-Path $obfWorkspace $_.Name) -Force }
+
+    # 执行混淆（xml 的 InPath 相对 cwd 解析，以 installer\ 为 cwd）
     Write-Host "执行混淆，配置: $obfuscarConfig"
-    $env:OBFUSCAR_INPUT_PATH = $OutputRoot
-    $env:OBFUSCAR_OUTPUT_PATH = $obfuscatedOutput
-    
-    obfuscar.console "$obfuscarConfig"
-    if ($LASTEXITCODE -ne 0) {
-        throw "混淆失败（exit $LASTEXITCODE）"
+    Push-Location $scriptRoot
+    try {
+        obfuscar.console "$obfuscarConfig"
+        if ($LASTEXITCODE -ne 0) {
+            throw "混淆失败（exit $LASTEXITCODE）"
+        }
     }
-    
-    # 备份原始DLL
-    $backupDir = Join-Path $OutputRoot 'original_backup'
+    finally {
+        Pop-Location
+    }
+    $obfuscatedOutput = Join-Path $obfWorkspace 'obfuscated'
+
+    # 备份原始DLL（放 payload 外：未混淆程序集不得进入 manifest 与分发产物）
+    $backupDir = Join-Path $scriptRoot 'original_backup'
     if (Test-Path $backupDir) {
         Remove-Item -Path $backupDir -Recurse -Force
     }
@@ -128,7 +142,7 @@ if (-not $SkipObfuscation) {
         'services\Winknow.ProcessControl.dll',
         'services\Winknow.DeviceSecurity.dll',
         'agent\Winknow.SessionAgent.dll',
-        'services\Winknow.Licensing.dll',
+        'admin\Winknow.Licensing.dll',
         'updater\Winknow.TrustedUpdater.dll'
     )
     
@@ -136,25 +150,29 @@ if (-not $SkipObfuscation) {
     foreach ($dllPath in $obfuscatedDlls) {
         $originalPath = Join-Path $OutputRoot $dllPath
         $backupPath = Join-Path $backupDir $dllPath
-        $obfuscatedPath = Join-Path $obfuscatedOutput $dllPath
-        
-        if (Test-Path $originalPath -and (Test-Path $obfuscatedPath)) {
+        # 平铺工作区按文件名取回
+        $obfuscatedPath = Join-Path $obfuscatedOutput (Split-Path $dllPath -Leaf)
+
+        if (-not (Test-Path $obfuscatedPath)) {
+            throw "混淆产物缺失: $obfuscatedPath"
+        }
+        if (Test-Path $originalPath) {
             # 备份原始文件
             $backupSubDir = Split-Path $backupPath -Parent
             if (-not (Test-Path $backupSubDir)) {
                 New-Item -ItemType Directory -Force -Path $backupSubDir | Out-Null
             }
             Copy-Item -Path $originalPath -Destination $backupPath -Force
-            
+
             # 替换为混淆版本
             Copy-Item -Path $obfuscatedPath -Destination $originalPath -Force
             Write-Host "  已混淆: $dllPath" -ForegroundColor Green
         }
     }
-    
-    # 清理临时文件
-    if (Test-Path $obfuscatedOutput) {
-        Remove-Item -Path $obfuscatedOutput -Recurse -Force
+
+    # 清理临时工作区
+    if (Test-Path $obfWorkspace) {
+        Remove-Item -Path $obfWorkspace -Recurse -Force
     }
     
     Write-Host "混淆完成，原始DLL已备份到: $backupDir" -ForegroundColor Green
@@ -167,6 +185,21 @@ Write-Step "部署默认策略文件"
 $policyDir = Join-Path $OutputRoot 'policy'
 New-Item -ItemType Directory -Force -Path $policyDir | Out-Null
 Copy-Item "$solutionRoot\policies\default_policy_v7.0.json" $policyDir -Force
+
+# ── 3b. Flutter 客户端入 payload（可选）───────────────────────
+# suanfatong 构建产物：flutter build windows --release
+#   → <suanfatong>\build\windows\x64\runner\Release\
+# iss 将 payload\app 装到 {app}\Suanfatong（缺失时 skipifsourcedoesntexist）
+if ($FlutterBuildRoot) {
+    if (-not [IO.Path]::IsPathRooted($FlutterBuildRoot)) {
+        $FlutterBuildRoot = Join-Path (Get-Location) $FlutterBuildRoot
+    }
+    if (-not (Test-Path $FlutterBuildRoot -PathType Container)) { throw "FlutterBuildRoot 不存在: $FlutterBuildRoot" }
+    Write-Step "注入 Flutter 客户端 → payload\app"
+    $appDir = Join-Path $OutputRoot 'app'
+    New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+    Copy-Item (Join-Path $FlutterBuildRoot '*') $appDir -Recurse -Force
+}
 
 # A public key is required for any signed, distributable release.  It is deliberately
 # copied as a separate verification artifact; private keys are never read by this script.
@@ -204,7 +237,7 @@ $entries = foreach ($f in $files) {
 }
 $manifest = [PSCustomObject]@{
     product   = 'Winknow'
-    version   = '7.0.0'
+    version   = '7.0.1'
     generated = (Get-Date).ToUniversalTime().ToString('o')
     files     = $entries
 }

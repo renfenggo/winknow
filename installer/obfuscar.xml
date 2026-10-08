@@ -1,25 +1,26 @@
 <?xml version='1.0'?>
 <Obfuscator>
-  <Var name="InPath" value="." />
-  <Var name="OutPath" value=".\obfuscated" />
+  <Var name="InPath" value=".\obf_workspace" />
+  <Var name="OutPath" value=".\obf_workspace\obfuscated" />
 
-  <!-- 混淆项目列表：services + 核心库 -->
+  <!-- 混淆项目列表：Build-Release.ps1 把 payload 全部程序集平铺到 obf_workspace -->
+  <!-- （Obfuscar 仅在 InPath 根解析依赖，分目录结构会报 Unable to resolve dependency） -->
   <!-- 注意：AdminUI (WPF) 不混淆，XAML 绑定需要原名 -->
-  <Module file="$(InPath)\services\Winknow.ControlService.dll">
+  <Module file="$(InPath)\Winknow.ControlService.dll">
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
     <SkipType name="IpcMessage" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.GuardService.dll">
+  <Module file="$(InPath)\Winknow.GuardService.dll">
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
     <SkipType name="IpcMessage" />
   </Module>
 
-  <Module file="$(InPath)\updater\Winknow.TrustedUpdater.dll">
+  <Module file="$(InPath)\Winknow.TrustedUpdater.dll">
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
@@ -27,36 +28,36 @@
   </Module>
 
   <!-- 核心库（需要依赖库） -->
-  <Module file="$(InPath)\services\Winknow.Core.dll">
+  <Module file="$(InPath)\Winknow.Core.dll">
     <!-- 结果类型 - 反射契约，必须保持原名 -->
     <SkipType name="Result`1" />
     <SkipType name="Result" />
     <SkipType name="ErrorCode" />
-    
+
     <!-- 公共基础类型需要保持稳定 -->
     <SkipType name="DeviceId" />
     <SkipType name="SecurityUtils" />
     <SkipType name="Constants" />
-    
+
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.Security.dll">
+  <Module file="$(InPath)\Winknow.Security.dll">
     <!-- 维护密码和TOTP需要稳定API -->
     <SkipType name="MaintenancePassword" />
     <SkipType name="MaintenanceSession" />
     <SkipType name="RecoveryCodeStore" />
     <SkipType name="TotpGenerator" />
     <SkipType name="DpapiProtector" />
-    
+
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.Ipc.dll">
+  <Module file="$(InPath)\Winknow.Ipc.dll">
     <!-- IPC 消息协议 - 必须完全稳定 -->
     <SkipType name="IpcMessage" />
     <SkipType name="IpcServer" />
@@ -64,62 +65,62 @@
     <SkipType name="IpcAuthenticator" />
     <SkipType name="IpcConstants" />
     <SkipType name="HeartbeatLease" />
-    
+
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.Logging.dll">
+  <Module file="$(InPath)\Winknow.Logging.dll">
     <!-- 日志链需要稳定的签名API -->
     <SkipType name="LogCheckpointSigner" />
     <SkipType name="HashChain" />
     <SkipType name="EventLogAnchor" />
-    
+
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.Network.dll">
+  <Module file="$(InPath)\Winknow.Network.dll">
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.Policy.dll">
+  <Module file="$(InPath)\Winknow.Policy.dll">
     <!-- 策略文件处理需要稳定API -->
     <SkipType name="PolicyFile" />
     <SkipType name="PolicyLoader" />
-    
+
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.ProcessControl.dll">
+  <Module file="$(InPath)\Winknow.ProcessControl.dll">
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\services\Winknow.DeviceSecurity.dll">
+  <Module file="$(InPath)\Winknow.DeviceSecurity.dll">
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <Module file="$(InPath)\agent\Winknow.SessionAgent.dll">
+  <Module file="$(InPath)\Winknow.SessionAgent.dll">
     <!-- 会话代理需要稳定API用于IPC通信 -->
     <SkipType name="SessionMutex" />
-    
+
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />
   </Module>
 
-  <!-- 授权库（阶段B新增） -->
-  <Module file="$(InPath)\services\Winknow.Licensing.dll">
+  <!-- 授权库（随 AdminUI 发布；服务端已不引用，第1项 P0 重构后仅 AdminUI 使用） -->
+  <Module file="$(InPath)\Winknow.Licensing.dll">
     <!-- 授权验证需要稳定API用于IPC通信和JSON序列化 -->
     <SkipType name="ILicenseProvider" />
     <SkipType name="DeviceLicenseClient" />
@@ -127,7 +128,7 @@
     <SkipType name="LicenseEnforcement" />
     <SkipType name="TeacherLicenseServer" />
     <SkipType name="OfflineGraceStore" />
-    
+
     <SkipMethod type="*" name="*.ToString" />
     <SkipMethod type="*" name="*.GetHashCode" />
     <SkipMethod type="*" name="*.Equals" />

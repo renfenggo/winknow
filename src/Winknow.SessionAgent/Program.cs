@@ -46,7 +46,7 @@ internal static class Program
 
         // 2. 连接 ControlService 并完成连接期握手（component=session_agent）
         var deviceId = DeviceId.Generate();
-        var componentVersion = "7.0.0";
+        var componentVersion = "7.0.1";
         for (var i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "--version")

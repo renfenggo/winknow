@@ -13,12 +13,12 @@
 ; =====================================================================
 
 #define MyAppName "Winknow"
-#define MyAppVersion "7.0.0"
+#define MyAppVersion "7.0.1"
 #define MyAppPublisher "Winknow Project"
 #define MyAppExeName "Winknow.AdminUI.exe"
 
 [Setup]
-AppId={{9C1F6B2A-4E3D-4F8A-9B7C-WINKNOWV700}
+AppId={{8F3A2C41-7B5E-4D69-9A0C-3E1F5B7D9E42}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -26,7 +26,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=admin
 OutputDir=dist
-OutputBaseFilename=WinknowSetup-{#MyAppVersion}
+OutputBaseFilename=WinknowSetup_{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -39,13 +39,15 @@ Uninstallable=yes
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Types]
-Name: "full"; Description: "完整安装（服务 + 管理控制台 + 更新器）"
+Name: "full"; Description: "完整安装（服务 + 管理控制台 + 更新器 + 算法通客户端）"
 Name: "custom"; Description: "自定义"; Flags: iscustom
 
 [Components]
 Name: "services"; Description: "管控服务（WinknowControl + WinknowGuard）"; Types: full custom; Flags: fixed
 Name: "admin"; Description: "管理控制台（AdminUI）"; Types: full
 Name: "updater"; Description: "可信更新器（TrustedUpdater）"; Types: full custom; Flags: fixed
+Name: "bridge"; Description: "桌面桥接器（Winknow.DesktopBridge，算法通客户端 IPC 入口）"; Types: full custom
+Name: "student"; Description: "算法通学习客户端（Flutter）"; Types: full
 
 [Files]
 ; 服务二进制 → deploy\Current（服务从此运行；更新走槽切换）
@@ -58,6 +60,10 @@ Source: "payload\admin\*"; DestDir: "{app}\AdminUI"; Components: admin; Flags: i
 Source: "payload\agent\*"; DestDir: "{commonappdata}\Winknow\deploy\Current\agent"; Components: services; Flags: ignoreversion recursesubdirs
 ; 恢复工具不受部署槽切换影响
 Source: "payload\tools\*"; DestDir: "{app}\Tools"; Components: services; Flags: ignoreversion recursesubdirs
+; DesktopBridge → 安装根目录（算法通 desktop_bridge_client 固定探测 {autopf}\Winknow\Winknow.DesktopBridge.exe）
+Source: "payload\bridge\*"; DestDir: "{app}"; Components: bridge; Flags: ignoreversion recursesubdirs
+; 算法通学习客户端（Build-Release.ps1 -FlutterBuildRoot 注入 payload\app；缺失时跳过）
+Source: "payload\app\*"; DestDir: "{app}\Suanfatong"; Components: student; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
 ; 更新包验证公钥；正式构建必须提供，测试构建可省略
 Source: "payload\keys\publickey.pem"; DestDir: "{commonappdata}\Winknow\deploy"; Components: updater; Flags: ignoreversion skipifsourcedoesntexist
 ; 默认策略（仅首次安装部署；升级不覆盖机房定制策略）
@@ -95,6 +101,7 @@ Type: filesandordirs; Name: "{commonappdata}\Winknow\deploy"
 [Icons]
 Name: "{group}\Winknow 管理控制台"; Filename: "{app}\AdminUI\{#MyAppExeName}"; Components: admin
 Name: "{commondesktop}\Winknow 管理控制台"; Filename: "{app}\AdminUI\{#MyAppExeName}"; Components: admin; Tasks: desktopicon
+Name: "{group}\算法通学习客户端"; Filename: "{app}\Suanfatong\bfs_learn.exe"; Components: student
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
@@ -146,14 +153,9 @@ begin
   end;
 end;
 
-function InstallServices(): Boolean;
-begin
-  Result := UsingServices; // 声明性占位（实际创建在 [Run] sc.exe）
-end;
-
 function StartServicesNow(): Boolean;
 begin
-  Result := IsTaskSelected('startservices');
+  Result := WizardIsTaskSelected('startservices');
 end;
 
 // 卸载前置提示：维护模式授权（第 6 周机制在程序内校验；脚本层拦一道）

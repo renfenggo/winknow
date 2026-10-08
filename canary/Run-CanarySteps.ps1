@@ -125,15 +125,15 @@ $Steps = @(
        Fix=@('参考 docs\多品牌BIOS兼容矩阵与部署标准.md','按品牌 Key 设定统一密码') },
     @{ Id='P7'; G='pre'; Title='安装包 SHA256 核对'
        Prompt='将安装包放入本机，脚本自动计算 SHA256（与发布清单核对后通过）'
-       Cmd='$pkg="WinknowSetup_7.0.0.exe"; if(Test-Path $pkg){(Get-FileHash $pkg -Algorithm SHA256).Hash}'
-       Check={ (Test-Path '.\WinknowSetup_7.0.0.exe') }
+       Cmd='$pkg="WinknowSetup_7.0.1.exe"; if(Test-Path $pkg){(Get-FileHash $pkg -Algorithm SHA256).Hash}'
+       Check={ (Test-Path '.\WinknowSetup_7.0.1.exe') }
        Pass='哈希与发布清单一致'
        Fix=@('从打包机重新拷贝安装包','用 release_manifest.json 核对哈希') },
 
     # ---------- 阶段一 D1 ----------
     @{ Id='A1'; G='p1d1'; Title='安装 V7.0'
        Prompt='运行安装包完成安装（静默或向导均可）'
-       Cmd='.\WinknowSetup_7.0.0.exe /SILENT'
+       Cmd='.\WinknowSetup_7.0.1.exe /SILENT'
        Check={ (Test-Path 'C:\ProgramData\Winknow\deploy\Current\Winknow.ControlService.exe') }
        Pass='deploy\Current 下 ControlService.exe 存在'
        Fix=@('查看安装日志 %TEMP%\WinknowSetup*.log','确认 P1-P7 全部通过后重试','以管理员身份重跑安装包') },
@@ -150,10 +150,10 @@ $Steps = @(
        Pass='2 小时内生成新的装机核验报告'
        Fix=@('确认以管理员运行','核验报告四节自动项须全 PASS，否则先处理再继续') },
     @{ Id='A4'; G='p1d1'; Title='版本与回滚位'
-       Prompt='确认当前版本 7.0.0 且具备回滚位'
+       Prompt='确认当前版本 7.0.1 且具备回滚位'
        Cmd='C:\ProgramData\Winknow\deploy\Current\Winknow.TrustedUpdater.exe status'
-       Check={ $out = & 'C:\ProgramData\Winknow\deploy\Current\Winknow.TrustedUpdater.exe' status 2>$null; ($out | Select-String '7\.0\.0').Count -gt 0 }
-       Pass='status 输出 7.0.0'
+       Check={ $out = & 'C:\ProgramData\Winknow\deploy\Current\Winknow.TrustedUpdater.exe' status 2>$null; ($out | Select-String '7\.0\.1').Count -gt 0 }
+       Pass='status 输出 7.0.1'
        Fix=@('路径不对→检查 deploy\Current 落位','status 失败→看 updater 日志') },
     @{ Id='A5'; G='p1d1'; Title='AdminUI 首检导出'
        Prompt='打开 AdminUI → 设备安全页 → 检测 → 导出报告，评分记入备注'
