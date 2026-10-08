@@ -30,6 +30,22 @@ internal sealed class Worker : BackgroundService
 {
     private const string ServiceName = Constants.Services.Control;
 
+    /// <summary>
+    /// IPC 握手宣布的服务端能力清单（与 ControlCommandHost 注册表的
+    /// RequiredCapability 对齐；提取为常量供对齐测试引用）。
+    ///
+    /// P1（2026-10-08）：补 runner.execute——此前清单缺失导致生产握手
+    /// 取交集后仅授予 runner.read，学习端编程工作台的 runner.execute 被
+    /// IPC_CAPABILITY_MISMATCH 拒绝。dispatcher 的能力/角色校验保持不变
+    /// （仅 bridge 角色可调、命令级 90s 超时）。
+    /// </summary>
+    internal static readonly IReadOnlySet<string> SupportedIpcCapabilities =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "status.read", "device.read", "classroom.control", "policy.control",
+            "runner.read", "runner.execute", "system.control",
+        };
+
     private readonly ILogger<Worker> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private IpcServer? _ipcServer;
@@ -234,11 +250,7 @@ internal sealed class Worker : BackgroundService
         {
             Protocol = ProtocolVersion.Current,
             ComponentVersion = Constants.Version,
-            SupportedCapabilities = new HashSet<string>(StringComparer.Ordinal)
-            {
-                "status.read", "device.read", "classroom.control", "policy.control",
-                "runner.read", "system.control",
-            },
+            SupportedCapabilities = new HashSet<string>(Worker.SupportedIpcCapabilities, StringComparer.Ordinal),
             DeviceId = deviceId,
             SessionTtlSeconds = 28800,
         };

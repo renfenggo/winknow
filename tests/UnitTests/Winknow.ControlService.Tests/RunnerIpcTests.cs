@@ -91,6 +91,43 @@ public sealed class RunnerIpcTests
     }
 
     [Fact]
+    public void Worker_SupportedCapabilities_Cover_All_Dispatcher_Requirements()
+    {
+        // P1（2026-10-08）问题复现：生产 Worker 能力清单缺 runner.execute，
+        // 握手取交集后 Bridge 仅获 runner.read，runner.execute 被
+        // IPC_CAPABILITY_MISMATCH 拒绝。对齐校验：dispatcher 注册的每个
+        // RequiredCapability 都必须在服务端握手清单中（防回归）。
+        var host = CreateHost();
+        var announced = Worker.SupportedIpcCapabilities;
+
+        Assert.Contains("runner.execute", announced);
+        foreach (var spec in host.Registry.Specs)
+        {
+            Assert.Contains(
+                spec.RequiredCapability,
+                announced,
+                StringComparer.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Worker_SupportedCapabilities_Cover_Bridge_DefaultRequests()
+    {
+        // DesktopBridge（Program.cs）默认请求能力必须全部可被授予，
+        // 否则生产握手后学习端工作台无法执行（见上）。
+        var bridgeRequests = new[]
+        {
+            "status.read", "device.read", "runner.read", "runner.execute",
+        };
+        var announced = Worker.SupportedIpcCapabilities;
+
+        foreach (var capability in bridgeRequests)
+        {
+            Assert.Contains(capability, announced);
+        }
+    }
+
+    [Fact]
     public async Task GetCapabilities_WithoutExecutor_ReturnsUnavailable()
     {
         var host = CreateHost();
