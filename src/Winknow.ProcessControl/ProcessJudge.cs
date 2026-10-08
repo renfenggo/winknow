@@ -10,8 +10,10 @@ namespace Winknow.ProcessControl;
 public sealed class ProcessJudge
 {
     private readonly ILogger<ProcessJudge>? _logger;
-    private readonly WhitelistRuleSet _whitelist;
-    private readonly HashSet<string> _highRiskInterpreters;
+    // P1 生效链：字段可运行时替换（UpdateRules），引用赋值原子；
+    // 白名单与黑名单两字段间存在瞬时混合窗口，均为"某份合法策略"的组合，可接受
+    private WhitelistRuleSet _whitelist;
+    private HashSet<string> _highRiskInterpreters;
 
     /// <summary>默认高风险解释器黑名单（与 default_policy_v7.0.json 一致）。</summary>
     private static readonly HashSet<string> DefaultHighRiskInterpreters = new(StringComparer.OrdinalIgnoreCase)
@@ -33,6 +35,22 @@ public sealed class ProcessJudge
         _highRiskInterpreters = highRiskInterpreters is null
             ? DefaultHighRiskInterpreters
             : new HashSet<string>(highRiskInterpreters, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 运行时替换白名单与高风险解释器黑名单（P1 生效链：policy.apply 后无需重启服务）。
+    /// </summary>
+    /// <param name="whitelist">新白名单规则集。</param>
+    /// <param name="highRiskInterpreters">新高风险解释器黑名单（null 时保留现值）。</param>
+    public void UpdateRules(
+        WhitelistRuleSet whitelist,
+        IReadOnlyCollection<string>? highRiskInterpreters = null)
+    {
+        _whitelist = whitelist ?? throw new ArgumentNullException(nameof(whitelist));
+        if (highRiskInterpreters is not null)
+        {
+            _highRiskInterpreters = new HashSet<string>(highRiskInterpreters, StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>

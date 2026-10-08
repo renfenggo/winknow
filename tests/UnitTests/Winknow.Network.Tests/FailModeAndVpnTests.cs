@@ -138,4 +138,23 @@ public class FailModeAndVpnTests
         Assert.True(r.Detected);
         Assert.Contains(VpnType.Process, r.Items.Select(i => i.Type));
     }
+
+    [Fact]
+    public void VpnDetector_UpdatePolicy_TakesEffect_AtRuntime()
+    {
+        // P1 生效链：policy.apply 后无需重建检测器——黑名单按新策略即时生效
+        var detector = new VpnTunDetector(new VpnDetectionSection
+        {
+            BlockedProcesses = new List<string>(),
+            DetectVirtualAdapters = false
+        });
+        Assert.Empty(detector.DetectProcesses()); // 默认不检测 explorer
+
+        detector.UpdatePolicy(new VpnDetectionSection
+        {
+            BlockedProcesses = new List<string> { "explorer" },
+            DetectVirtualAdapters = false
+        });
+        Assert.Contains("explorer", detector.DetectProcesses()); // 运行中更新后立即检测
+    }
 }

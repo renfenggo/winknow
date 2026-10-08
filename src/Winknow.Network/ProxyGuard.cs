@@ -13,7 +13,8 @@ namespace Winknow.Network;
 public sealed class ProxyGuard : IDisposable
 {
     private readonly ILogger<ProxyGuard>? _logger;
-    private readonly ProxySection _policy;
+    // P1 生效链：策略可运行时替换（UpdatePolicy），引用赋值原子
+    private ProxySection _policy;
     private Timer? _periodicTimer;
     private bool _disposed;
 
@@ -32,6 +33,16 @@ public sealed class ProxyGuard : IDisposable
     {
         _policy = policy;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// 运行时替换代理策略（P1 生效链：policy.apply 后无需重启服务）。
+    /// 后续周期校验即按新策略判定；调用方可立即 CheckAndRestore 强制一次。
+    /// </summary>
+    public void UpdatePolicy(ProxySection policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        _policy = policy;
     }
 
     /// <summary>

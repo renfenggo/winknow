@@ -57,6 +57,21 @@ public class ProxyGuardTests : IDisposable
     }
 
     [Fact]
+    public void UpdatePolicy_SwitchesTamperRules_AtRuntime()
+    {
+        // P1 生效链：policy.apply 后无需重启守卫——同一快照按新策略重新判定
+        var guard = new ProxyGuard(_denyPolicy);
+        var snap = new ProxySnapshot(1, "127.0.0.1:8080", "", "", "CurrentUser");
+        Assert.True(guard.IsTampered(snap)); // 禁代理策略下视为篡改
+
+        guard.UpdatePolicy(new ProxySection { Allowed = true });
+        Assert.False(guard.IsTampered(snap)); // 运行中放宽后合规
+
+        guard.UpdatePolicy(_denyPolicy);
+        Assert.True(guard.IsTampered(snap)); // 再次收紧后恢复检测
+    }
+
+    [Fact]
     public void IsTampered_PacAllowedButWrongUrl_ReturnsTrue()
     {
         var pacPolicy = new ProxySection

@@ -617,11 +617,13 @@ internal sealed class Worker : BackgroundService
     }
 
     /// <summary>
-    /// 验证、备份并落盘新策略，随后重载（policy.apply 后端）。
+    /// 验证、备份并落盘新策略，随后重载并同步应用到运行中的执行器（policy.apply 后端）。
     /// 非法策略在候选文件上即被拒绝，绝不触碰当前生效文件。
     /// R04：候选与重载均强制真实验签（未签名/伪签名/篡改拒绝）。
+    /// P1 生效链：落盘成功后调用 ApplyPolicyToExecutors 刷新执行器；
+    /// 部分执行器失败不影响落盘结果，错误清单随 PolicyApplyOutcome 如实上报。
     /// </summary>
-    private Result<PolicyFile> ApplyPolicy(string policyPath, string policyJson)
+    private Result<PolicyApplyOutcome> ApplyPolicy(string policyPath, string policyJson)
     {
         var loader = new PolicyLoader(_loggerFactory.CreateLogger<PolicyLoader>());
         var candidatePath = policyPath + ".candidate";
@@ -632,7 +634,7 @@ internal sealed class Worker : BackgroundService
             if (!validated.IsSuccess)
             {
                 TryDeleteFile(candidatePath);
-                return validated;
+                return Result<PolicyApplyOutcome>.Failure(validated.ErrorCode, validated.ErrorMessage);
             }
 
             if (File.Exists(policyPath))
@@ -643,17 +645,19 @@ internal sealed class Worker : BackgroundService
             File.Move(candidatePath, policyPath, overwrite: true);
 
             var reloaded = LoadPolicyTrusted(loader, policyPath);
-            if (reloaded.IsSuccess)
+            if (!reloaded.IsSuccess)
             {
-                _policy = reloaded.Data!;
+                return Result<PolicyApplyOutcome>.Failure(reloaded.ErrorCode, reloaded.ErrorMessage);
             }
 
-            return reloaded;
+            _policy = reloaded.Data!;
+            var applyErrors = ApplyPolicyToExecutors(_policy);
+            return Result<PolicyApplyOutcome>.Success(new PolicyApplyOutcome(_policy, applyErrors));
         }
         catch (Exception ex)
         {
             TryDeleteFile(candidatePath);
-            return Result<PolicyFile>.Failure(ErrorCode.Unknown, ex.Message);
+            return Result<PolicyApplyOutcome>.Failure(ErrorCode.Unknown, ex.Message);
         }
     }
 
@@ -709,14 +713,14 @@ internal sealed class Worker : BackgroundService
     }
 
     /// <summary>
-    /// 从备份恢复策略并重载（policy.restore 后端）。
+    /// 从备份恢复策略并重载，随后同步应用到运行中的执行器（policy.restore 后端）。
     /// </summary>
-    private Result<PolicyFile> RestorePolicy(string policyPath)
+    private Result<PolicyApplyOutcome> RestorePolicy(string policyPath)
     {
         var backupPath = policyPath + ".bak";
         if (!File.Exists(backupPath))
         {
-            return Result<PolicyFile>.Failure(ErrorCode.PathNotFound, "no policy backup available.");
+            return Result<PolicyApplyOutcome>.Failure(ErrorCode.PathNotFound, "no policy backup available.");
         }
 
         try
@@ -725,22 +729,225 @@ internal sealed class Worker : BackgroundService
             var restored = LoadPolicyTrusted(loader, backupPath);
             if (!restored.IsSuccess)
             {
-                return restored;
+                return Result<PolicyApplyOutcome>.Failure(restored.ErrorCode, restored.ErrorMessage);
             }
 
             File.Copy(backupPath, policyPath, overwrite: true);
             var reloaded = LoadPolicyTrusted(loader, policyPath);
-            if (reloaded.IsSuccess)
+            if (!reloaded.IsSuccess)
             {
-                _policy = reloaded.Data!;
+                return Result<PolicyApplyOutcome>.Failure(reloaded.ErrorCode, reloaded.ErrorMessage);
             }
 
-            return reloaded;
+            _policy = reloaded.Data!;
+            var applyErrors = ApplyPolicyToExecutors(_policy);
+            return Result<PolicyApplyOutcome>.Success(new PolicyApplyOutcome(_policy, applyErrors));
         }
         catch (Exception ex)
         {
-            return Result<PolicyFile>.Failure(ErrorCode.Unknown, ex.Message);
+            return Result<PolicyApplyOutcome>.Failure(ErrorCode.Unknown, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// P1（2026-10-08）策略生效链：将已验证的策略同步应用到运行中的执行器。
+    /// 问题复现：此前 ApplyPolicy/RestorePolicy 仅"写文件 + 重载内存快照"，
+    /// 进程白名单/网站过滤/代理/DNS/浏览器策略/USB 等执行器全部维持旧值
+    /// 直到服务重启——策略更新形同虚设，且响应恒报 applied=true。
+    /// 本方法可重入：执行器尚未创建（启动期无策略文件）时按需创建；
+    /// 已创建的更新策略引用并立即强制校验一次。各执行器独立容错——
+    /// 部分失败不影响其余执行器，错误清单如实上报（applied=false + apply_errors）。
+    /// </summary>
+    /// <returns>执行器应用错误清单（空 = 全部应用成功）。</returns>
+    private IReadOnlyList<string> ApplyPolicyToExecutors(PolicyFile policy)
+    {
+        var errors = new List<string>();
+
+        // 1. 进程管控：白名单 + 高风险解释器黑名单
+        try
+        {
+            if (_judge is null)
+            {
+                _judge = new ProcessJudge(
+                    WhitelistRuleSet.FromPolicy(policy),
+                    _loggerFactory.CreateLogger<ProcessJudge>(),
+                    policy.SoftwareControl.HighRiskInterpreters.Blocked);
+            }
+            else
+            {
+                _judge.UpdateRules(
+                    WhitelistRuleSet.FromPolicy(policy),
+                    policy.SoftwareControl.HighRiskInterpreters.Blocked);
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"process_judge: {ex.Message}");
+        }
+
+        // 2. 网站白名单过滤
+        try
+        {
+            _websiteFilter ??= new WebsiteFilter(_loggerFactory.CreateLogger<WebsiteFilter>());
+            _websiteFilter.LoadFromPolicy(policy.NetworkControl.WebsiteWhitelist);
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"website_filter: {ex.Message}");
+        }
+
+        // 3. hosts 文件保护（无策略参数，仅保证已启动；幂等）
+        try
+        {
+            if (_hostsProtector is null)
+            {
+                _hostsProtector = new HostsProtector(_loggerFactory.CreateLogger<HostsProtector>());
+                _hostsProtector.Initialize();
+                _hostsProtector.StartMonitoring();
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"hosts_protector: {ex.Message}");
+        }
+
+        // 4. 代理守卫：更新策略并立即恢复一次（新禁用策略即时生效）
+        try
+        {
+            if (_proxyGuard is null)
+            {
+                _proxyGuard = new ProxyGuard(
+                    policy.NetworkControl.Proxy,
+                    _loggerFactory.CreateLogger<ProxyGuard>());
+                _proxyGuard.StartMonitoring();
+            }
+            else
+            {
+                _proxyGuard.UpdatePolicy(policy.NetworkControl.Proxy);
+            }
+
+            _proxyGuard.CheckAndRestore();
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"proxy_guard: {ex.Message}");
+        }
+
+        // 5. DNS 监控：更新策略并立即检查一次
+        try
+        {
+            if (_dnsMonitor is null)
+            {
+                _dnsMonitor = new DnsMonitor(
+                    policy.NetworkControl.Dns,
+                    _loggerFactory.CreateLogger<DnsMonitor>());
+            }
+            else
+            {
+                _dnsMonitor.UpdatePolicy(policy.NetworkControl.Dns);
+            }
+
+            _dnsMonitor.Check();
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"dns_monitor: {ex.Message}");
+        }
+
+        // 6. 浏览器企业策略
+        try
+        {
+            _browserPolicyEnforcer ??= new BrowserPolicyEnforcer(
+                _loggerFactory.CreateLogger<BrowserPolicyEnforcer>());
+            var browserResult = _browserPolicyEnforcer.ApplyAll(policy.NetworkControl.BrowserPolicy);
+            if (!browserResult.IsSuccess)
+            {
+                errors.Add($"browser_policy: {browserResult.ErrorMessage}");
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"browser_policy: {ex.Message}");
+        }
+
+        // 7. VPN/TUN 检测：更新策略并检测一次
+        try
+        {
+            if (_vpnDetector is null)
+            {
+                _vpnDetector = new VpnTunDetector(
+                    policy.NetworkControl.VpnDetection,
+                    _loggerFactory.CreateLogger<VpnTunDetector>());
+            }
+            else
+            {
+                _vpnDetector.UpdatePolicy(policy.NetworkControl.VpnDetection);
+            }
+
+            var vpnResult = _vpnDetector.Detect();
+            if (vpnResult.Detected)
+            {
+                _logger?.LogWarning("VPN detected after policy apply: {Count} items", vpnResult.Items.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"vpn_detector: {ex.Message}");
+        }
+
+        // 8. 网站健康检测：Timer 周期与 HttpClient 超时随策略构造，无法原位更新 → 重建
+        try
+        {
+            _websiteHealthChecker?.Dispose();
+            _websiteHealthChecker = null;
+            if (policy.NetworkControl.WebsiteHealth.Endpoints.Count > 0)
+            {
+                _websiteHealthChecker = new WebsiteHealthChecker(
+                    policy.NetworkControl.WebsiteHealth,
+                    _loggerFactory.CreateLogger<WebsiteHealthChecker>());
+                _websiteHealthChecker.UnhealthyDetected += items =>
+                    _logger?.LogWarning("Website unhealthy: {Endpoints}",
+                        string.Join(", ", items.Select(i => i.Name)));
+                _websiteHealthChecker.StartMonitoring();
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"website_health: {ex.Message}");
+        }
+
+        // 9. USB 存储管控
+        try
+        {
+            _usbController ??= new UsbStorageController(_loggerFactory.CreateLogger<UsbStorageController>());
+            if (policy.UsbControl.MassStorage.Enabled)
+            {
+                _usbController.Enable();
+            }
+            else
+            {
+                _usbController.Disable();
+                _logger?.LogWarning("USB Mass Storage disabled by policy");
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"usb_controller: {ex.Message}");
+        }
+
+        if (errors.Count == 0)
+        {
+            _logger?.LogInformation("Policy {PolicyId} v{Version} applied to all executors",
+                policy.PolicyId, policy.Version);
+        }
+        else
+        {
+            _logger?.LogError(
+                "Policy {PolicyId} v{Version} applied with {Errors} executor error(s): {Detail}",
+                policy.PolicyId, policy.Version, errors.Count, string.Join("; ", errors));
+        }
+
+        return errors;
     }
 
     private static void TryDeleteFile(string path)

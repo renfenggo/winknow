@@ -108,15 +108,17 @@ public static class TelemetryEvents
     /// <summary>策略下发结果事件（成功与失败都上报；reason 截断 200 字符）。</summary>
     /// <param name="policyId">策略 ID（失败时 null）。</param>
     /// <param name="policyVersion">策略版本（失败时 null）。</param>
-    /// <param name="success">是否应用成功。</param>
-    /// <param name="reason">失败原因（成功为 null）。</param>
+    /// <param name="success">是否生效成功（P1 生效链：须为执行器真实应用结果，而非仅落盘）。</param>
+    /// <param name="reason">失败原因（成功为 null；部分执行器失败时为错误清单）。</param>
     /// <param name="deviceId">设备标识。</param>
     /// <param name="appVersion">客户端版本。</param>
     /// <param name="traceId">链路追踪 ID。</param>
+    /// <param name="saved">是否落盘成功（P1 生效链：区分"保存成功/应用失败"与"拒绝"；null 省略，兼容旧语义）。</param>
     /// <returns>白名单事件。</returns>
     public static TelemetryEvent PolicyResult(
         string? policyId, string? policyVersion, bool success, string? reason,
-        string? deviceId = null, string? appVersion = null, string? traceId = null) => new()
+        string? deviceId = null, string? appVersion = null, string? traceId = null,
+        bool? saved = null) => new()
     {
         EventId = NewId(),
         EventName = PolicyResultName,
@@ -128,6 +130,7 @@ public static class TelemetryEvents
             ["policy_id"] = policyId,
             ["policy_version"] = policyVersion,
             ["success"] = success,
+            ["saved"] = saved,
             ["reason"] = reason is null ? null : (reason.Length > 200 ? reason[..200] : reason),
         },
     };

@@ -11,6 +11,18 @@ using Winknow.Telemetry;
 namespace Winknow.ControlService;
 
 /// <summary>
+/// policy.apply / policy.restore 的两段执行结果（P1 生效链）：
+/// 落盘+重载成功（Result.IsSuccess）后，运行中执行器的刷新可能部分失败
+/// （ApplyErrors 非空）。响应与遥测须如实区分"保存成功"与"应用成功"，
+/// 不再以 applied=true 掩盖执行器未更新的状态。
+/// </summary>
+internal sealed record PolicyApplyOutcome(PolicyFile Policy, IReadOnlyList<string> ApplyErrors)
+{
+    /// <summary>全部执行器刷新成功。</summary>
+    public bool Applied => ApplyErrors.Count == 0;
+}
+
+/// <summary>
 /// ControlService 命令宿主：构建 method_registry.md 白名单对应的命令注册表，
 /// 并提供各方法 handler。分发语义（白名单/角色/能力/超时）由 IpcCommandRegistry 承担，
 /// 本类只负责业务语义，保持可单测的薄层。
@@ -69,11 +81,11 @@ internal sealed class ControlCommandHost
     /// <summary>当前策略快照读取器（Worker 绑定；null 时报告策略未加载）。</summary>
     internal Func<PolicyFile?>? PolicySnapshot { private get; set; }
 
-    /// <summary>策略应用回调（Worker 绑定：验证、备份并落盘+重载）。</summary>
-    internal Func<string, Result<PolicyFile>>? PolicyApplier { private get; set; }
+    /// <summary>策略应用回调（Worker 绑定：验证、备份、落盘+重载，并将策略应用到运行中的执行器）。</summary>
+    internal Func<string, Result<PolicyApplyOutcome>>? PolicyApplier { private get; set; }
 
-    /// <summary>策略恢复回调（Worker 绑定：从备份恢复并重载）。</summary>
-    internal Func<Result<PolicyFile>>? PolicyRestorer { private get; set; }
+    /// <summary>策略恢复回调（Worker 绑定：从备份恢复、重载并应用到运行中的执行器）。</summary>
+    internal Func<Result<PolicyApplyOutcome>>? PolicyRestorer { private get; set; }
 
     /// <summary>Runner 执行器（Worker 绑定；null 时 runner.* 返回 UNAVAILABLE）。</summary>
     internal RunnerExecutor? Runner { private get; set; }
@@ -298,14 +310,12 @@ internal sealed class ControlCommandHost
 
         var policyJson = policyElement.GetString() ?? string.Empty;
         var result = PolicyApplier(policyJson);
-        _telemetry?.Enqueue(TelemetryEvents.PolicyResult(
-            result.IsSuccess ? result.Data!.PolicyId : null,
-            result.IsSuccess ? result.Data!.Version : null,
-            result.IsSuccess,
-            result.IsSuccess ? null : result.ErrorMessage,
-            _deviceId, _componentVersion, context.Request.TraceId));
         if (!result.IsSuccess)
         {
+            // 阶段一失败：验证/落盘被拒——success=false、saved=false（未保存）
+            _telemetry?.Enqueue(TelemetryEvents.PolicyResult(
+                null, null, success: false, result.ErrorMessage,
+                _deviceId, _componentVersion, context.Request.TraceId, saved: false));
             _logger?.LogWarning("Policy apply rejected: {Error} (caller={CallerSid})",
                 result.ErrorMessage, context.Session.CallerSid);
             return Task.FromResult(Error(
@@ -314,15 +324,34 @@ internal sealed class ControlCommandHost
                 context.Request.TraceId));
         }
 
-        var policy = result.Data!;
-        _logger?.LogInformation("Policy applied: {PolicyId} v{Version} (caller={CallerSid})",
-            policy.PolicyId, policy.Version, context.Session.CallerSid);
+        // 阶段二结果：落盘已成功（saved=true），执行器应用可能部分失败——
+        // 响应仍 ok=true（策略文件已生效），applied/apply_errors 如实上报
+        var outcome = result.Data!;
+        _telemetry?.Enqueue(TelemetryEvents.PolicyResult(
+            outcome.Policy.PolicyId, outcome.Policy.Version,
+            success: outcome.Applied,
+            reason: outcome.Applied ? null : string.Join("; ", outcome.ApplyErrors),
+            _deviceId, _componentVersion, context.Request.TraceId, saved: true));
+        if (!outcome.Applied)
+        {
+            _logger?.LogError(
+                "Policy {PolicyId} v{Version} saved but {Errors} executor(s) failed to apply: {Detail} (caller={CallerSid})",
+                outcome.Policy.PolicyId, outcome.Policy.Version, outcome.ApplyErrors.Count,
+                string.Join("; ", outcome.ApplyErrors), context.Session.CallerSid);
+        }
+        else
+        {
+            _logger?.LogInformation("Policy {PolicyId} v{Version} saved and applied to all executors (caller={CallerSid})",
+                outcome.Policy.PolicyId, outcome.Policy.Version, context.Session.CallerSid);
+        }
 
         return Task.FromResult(ResponseEnvelope.FromResult(new
         {
-            policy_id = policy.PolicyId,
-            policy_version = policy.Version,
-            applied = true,
+            policy_id = outcome.Policy.PolicyId,
+            policy_version = outcome.Policy.Version,
+            saved = true,
+            applied = outcome.Applied,
+            apply_errors = outcome.ApplyErrors,
         }));
     }
 
@@ -345,15 +374,29 @@ internal sealed class ControlCommandHost
                 context.Request.TraceId));
         }
 
-        var policy = result.Data!;
-        _logger?.LogInformation("Policy restored: {PolicyId} v{Version} (caller={CallerSid})",
-            policy.PolicyId, policy.Version, context.Session.CallerSid);
+        // 与 policy.apply 同构：恢复落盘成功后，执行器刷新结果如实上报
+        var outcome = result.Data!;
+        if (!outcome.Applied)
+        {
+            _logger?.LogError(
+                "Policy {PolicyId} v{Version} restored but {Errors} executor(s) failed to apply: {Detail} (caller={CallerSid})",
+                outcome.Policy.PolicyId, outcome.Policy.Version, outcome.ApplyErrors.Count,
+                string.Join("; ", outcome.ApplyErrors), context.Session.CallerSid);
+        }
+        else
+        {
+            _logger?.LogInformation("Policy {PolicyId} v{Version} restored and applied to all executors (caller={CallerSid})",
+                outcome.Policy.PolicyId, outcome.Policy.Version, context.Session.CallerSid);
+        }
 
         return Task.FromResult(ResponseEnvelope.FromResult(new
         {
-            policy_id = policy.PolicyId,
-            policy_version = policy.Version,
+            policy_id = outcome.Policy.PolicyId,
+            policy_version = outcome.Policy.Version,
             restored = true,
+            saved = true,
+            applied = outcome.Applied,
+            apply_errors = outcome.ApplyErrors,
         }));
     }
 

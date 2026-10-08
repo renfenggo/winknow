@@ -76,6 +76,47 @@ public class ProcessJudgeTests
         Assert.Equal(ErrorCode.ProcessBlocked, result.ErrorCode);
     }
 
+    [Fact(DisplayName = "P1 生效链：UpdateRules 后白名单即时生效（无需重建引擎）")]
+    public void UpdateRules_SwapsWhitelist_AtRuntime()
+    {
+        // 初始策略（VS Code/Dev-Cpp 白名单）不放行 C:\Tools\tool.exe
+        var info = new ProcessInfo { ProcessId = 5000, ProcessName = "tool", FilePath = @"C:\Tools\tool.exe" };
+        Assert.False(_judge.Judge(info).IsSuccess);
+
+        // 运行中下发热策略：白名单追加 C:\Tools\*
+        var newPolicy = CreateTestPolicy();
+        newPolicy.SoftwareControl.Whitelist.ByPath.Add(
+            new PathRule { Path = @"C:\Tools\*", Description = "教学工具" });
+        _judge.UpdateRules(
+            WhitelistRuleSet.FromPolicy(newPolicy),
+            newPolicy.SoftwareControl.HighRiskInterpreters.Blocked);
+
+        Assert.True(_judge.Judge(info).IsSuccess);
+    }
+
+    [Fact(DisplayName = "P1 生效链：UpdateRules 后高风险解释器黑名单即时生效")]
+    public void UpdateRules_SwapsHighRiskInterpreters_AtRuntime()
+    {
+        // 白名单放行 C:\Tools\*，但 wscript.exe 在初始黑名单 → 阻止
+        var policy = CreateTestPolicy();
+        policy.SoftwareControl.Whitelist.ByPath.Add(
+            new PathRule { Path = @"C:\Tools\*", Description = "教学工具" });
+        var judge = new ProcessJudge(
+            WhitelistRuleSet.FromPolicy(policy),
+            highRiskInterpreters: policy.SoftwareControl.HighRiskInterpreters.Blocked);
+        var info = new ProcessInfo
+        {
+            ProcessId = 5100,
+            ProcessName = "wscript",
+            FilePath = @"C:\Tools\wscript.exe"
+        };
+        Assert.False(judge.Judge(info).IsSuccess);
+
+        // 运行中下发新黑名单（不含 wscript）→ 放行
+        judge.UpdateRules(WhitelistRuleSet.FromPolicy(policy), new List<string> { "mshta.exe" });
+        Assert.True(judge.Judge(info).IsSuccess);
+    }
+
     [Fact(DisplayName = "下载目录程序阻止")]
     public void Judge_DownloadsPath_Blocked()
     {

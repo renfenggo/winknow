@@ -13,7 +13,8 @@ namespace Winknow.Network;
 public sealed class VpnTunDetector
 {
     private readonly ILogger<VpnTunDetector>? _logger;
-    private readonly VpnDetectionSection _policy;
+    // P1 生效链：策略可运行时替换（UpdatePolicy），引用赋值原子
+    private VpnDetectionSection _policy;
 
     /// <summary>检测到 VPN 时触发（参数：检测到的 VPN 项列表）。</summary>
     public event Action<IReadOnlyList<VpnDetectionItem>>? VpnDetected;
@@ -23,6 +24,16 @@ public sealed class VpnTunDetector
     {
         _policy = policy;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// 运行时替换 VPN 检测策略（P1 生效链：policy.apply 后无需重启服务）。
+    /// 后续 Detect 即按新策略判定。
+    /// </summary>
+    public void UpdatePolicy(VpnDetectionSection policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        _policy = policy;
     }
 
     /// <summary>
