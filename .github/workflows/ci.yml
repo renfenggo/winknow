@@ -39,11 +39,11 @@ jobs:
           dotnet test WinknowV7.sln --configuration Release --no-build --nologo 2>&1 |
             ForEach-Object { "$_" } | Tee-Object -FilePath test-output.log
           $code = $LASTEXITCODE
-          $failed = Select-String -Path test-output.log -Pattern '(^\s*(失败|Failed)\s+\S+)|(\[FAIL\])' |
-            Select-Object -First 10
+          $failed = Select-String -Path test-output.log -Pattern '(^\s*(失败|Failed)\s+\S+)|(\[FAIL\])' -Context 0,8 |
+            Select-Object -First 6
           foreach ($f in $failed) {
-            $m = $f.Line.Trim()
-            if ($m.Length -gt 200) { $m = $m.Substring(0, 200) }
+            $m = ($f.Line.Trim() + ' || ' + (($f.Context.PostContext | ForEach-Object { $_.Trim() }) -join ' / '))
+            if ($m.Length -gt 400) { $m = $m.Substring(0, 400) }
             Write-Host "::error::$m"
           }
           if ($code -ne 0 -and $failed.Count -eq 0) {
