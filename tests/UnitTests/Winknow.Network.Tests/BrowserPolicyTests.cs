@@ -100,15 +100,22 @@ public class BrowserPolicyTests
     public void IsChromePolicyApplied_PartialTarget_ReturnsFalse()
     {
         if (!IsAdministrator()) return;
+        // CI 首跑修正（2026-10-08）：本用例在非管理员环境下一直被跳过，
+        // CI（管理员）首次真实执行暴露断言构造反了——原写法先应用 FullTarget
+        // 再检查其 true 子集（partialTarget），三项全部已生效必然返回 true。
+        // 正确语义：只部分应用（不写 ProxyMode），完整目标应判定"未完全应用"。
+        // 开头清场防同类先行用例残留 FullTarget 写入（xunit 同类串行但顺序不定）。
+        Registry.LocalMachine.DeleteSubKeyTree(ChromePolicyKey, false);
         var enforcer = new BrowserPolicyEnforcer();
-        enforcer.ApplyChrome(FullTarget());
-        var partialTarget = new BrowserPolicyTarget
+        var partialApply = new BrowserPolicyTarget
         {
             DisableCustomProxy = false,
             DisableDoh = true,
             DisableSecureDns = true
         };
-        Assert.False(enforcer.IsChromePolicyApplied(partialTarget));
+        Assert.True(enforcer.ApplyChrome(partialApply).IsSuccess);
+        // FullTarget 要求 ProxyMode=2——未写入，IsChromePolicyApplied 应返回 false
+        Assert.False(enforcer.IsChromePolicyApplied(FullTarget()));
     }
 
     [Fact]
