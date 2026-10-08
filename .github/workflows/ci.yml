@@ -2,9 +2,9 @@ name: Winknow V7.0 CI
 
 on:
   push:
-    branches: [develop, main]
+    branches: [main, develop, "feature/**"]
   pull_request:
-    branches: [develop, main]
+  workflow_dispatch:
 
 jobs:
   build-and-test:
