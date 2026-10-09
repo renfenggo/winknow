@@ -1,9 +1,12 @@
+using System.Security.Principal;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Winknow.Core;
 using Winknow.Licensing;
 using Winknow.Core.Results;
 using Winknow.Ipc;
+using Winknow.Ipc.Protocol;
 using Microsoft.Extensions.Logging;
 
 namespace Winknow.AdminUI;
@@ -11,9 +14,15 @@ namespace Winknow.AdminUI;
 /// <summary>
 /// ClassroomPage.xaml 的交互逻辑
 /// 课堂总览页面：设备名单+实时状态+远程解锁（双路解锁）。
+/// R06（GO_LIVE §3.4b）：锁定/解锁在许可证状态变更成功后，经本机
+/// ControlService IPC（classroom.lock/unlock）向 session_agent 真实下发
+/// LockOverlay 遮罩（canary 单机演练拓扑：AdminUI/ControlService/Agent 同机）。
 /// </summary>
 public partial class ClassroomPage : Page
 {
+    private const string ClassroomLockMethod = "classroom.lock";
+    private const string ClassroomUnlockMethod = "classroom.unlock";
+
     private readonly TeacherLicenseServer _licenseServer;
     private readonly ILogger<ClassroomPage>? _logger;
     private DeviceStatusInfo? _selectedDevice;
@@ -120,7 +129,7 @@ public partial class ClassroomPage : Page
     /// <summary>
     /// 解锁设备。
     /// </summary>
-    private void UnlockButton_Click(object sender, RoutedEventArgs e)
+    private async void UnlockButton_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedDevice == null)
         {
@@ -142,7 +151,19 @@ public partial class ClassroomPage : Page
 
                 if (unlockResult.IsSuccess)
                 {
-                    MessageBox.Show("设备解锁成功", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                    // R06：许可证状态解锁成功后，经 IPC 真实下发 unlock（隐藏遮罩）
+                    var overlayResult = await InvokeClassroomMethodAsync(ClassroomUnlockMethod);
+                    if (overlayResult.Ok)
+                    {
+                        MessageBox.Show("设备解锁成功（锁屏遮罩已解除）", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    else
+                    {
+                        MessageBox.Show(
+                            $"解锁状态已记录，但锁屏遮罩解除失败：{overlayResult.Error?.Code} {overlayResult.Error?.Message}",
+                            "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+
                     LoadDevices();
                     _logger?.LogInformation("Device {DeviceId} unlocked by admin", _selectedDevice.DeviceId);
                 }
@@ -163,7 +184,7 @@ public partial class ClassroomPage : Page
     /// <summary>
     /// 锁定设备。
     /// </summary>
-    private void LockButton_Click(object sender, RoutedEventArgs e)
+    private async void LockButton_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedDevice == null)
         {
@@ -185,10 +206,19 @@ public partial class ClassroomPage : Page
 
                 if (lockResult.IsSuccess)
                 {
-                    MessageBox.Show("设备锁定成功", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
-
-                    // TODO 通过IPC通知SessionAgent显示锁屏遮罩
-                    // SendLockOverlayCommand(_selectedDevice.DeviceId, "SHOW");
+                    // R06 真实锁屏下发链路：许可证锁定成功后，经本机 ControlService
+                    // IPC（classroom.lock）向 session_agent 推送 LockOverlay 遮罩
+                    var overlayResult = await InvokeClassroomMethodAsync(ClassroomLockMethod);
+                    if (overlayResult.Ok)
+                    {
+                        MessageBox.Show("设备锁定成功（锁屏遮罩已下发）", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    else
+                    {
+                        MessageBox.Show(
+                            $"锁定状态已记录，但锁屏遮罩下发失败：{overlayResult.Error?.Code} {overlayResult.Error?.Message}",
+                            "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
 
                     LoadDevices();
                     _logger?.LogInformation("Device {DeviceId} locked by admin", _selectedDevice.DeviceId);
@@ -205,6 +235,38 @@ public partial class ClassroomPage : Page
                 MessageBox.Show($"锁定失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+    }
+
+    /// <summary>
+    /// 经本机 ControlService IPC 短连接调用课堂控制方法（R06 锁屏下发）：
+    /// 连接 → 握手（component=admin_tool，请求 classroom.control 能力）→
+    /// 调用 → 断开。授权由服务端判定（管理员 SID → system 角色）。
+    /// </summary>
+    /// <param name="method">方法名（classroom.lock / classroom.unlock）。</param>
+    /// <returns>服务端响应信封（连接/握手失败也返回错误信封，不抛出）。</returns>
+    private static async Task<ResponseEnvelope> InvokeClassroomMethodAsync(string method)
+    {
+        await using var client = new IpcClient(IpcConstants.ControlPipeName);
+        await client.ConnectAsync();
+
+        var handshake = new HandshakeParams
+        {
+            ProtocolVersion = ProtocolVersion.Current.ToString(),
+            Component = "admin_tool",
+            ComponentVersion = typeof(ClassroomPage).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
+            Capabilities = new[] { "classroom.control" },
+            DeviceId = DeviceId.Generate(),
+            CallerSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty,
+            SessionId = $"admin-ui-{Guid.NewGuid():N}",
+        };
+
+        var handshakeResponse = await client.HandshakeAsync(handshake);
+        if (!handshakeResponse.Ok)
+        {
+            return handshakeResponse;
+        }
+
+        return await client.InvokeAsync(new RequestEnvelope { Method = method });
     }
 
     /// <summary>
