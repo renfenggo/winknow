@@ -43,7 +43,7 @@ internal sealed class Worker : BackgroundService
         new HashSet<string>(StringComparer.Ordinal)
         {
             "status.read", "device.read", "classroom.control", "policy.control",
-            "runner.read", "runner.execute", "system.control",
+            "runner.read", "runner.execute", "system.control", "lock_overlay",
         };
 
     private readonly ILogger<Worker> _logger;
@@ -306,6 +306,12 @@ internal sealed class Worker : BackgroundService
             PolicyApplier = policyJson => ApplyPolicy(policyPath, policyJson),
             PolicyRestorer = () => RestorePolicy(policyPath),
             Runner = runnerExecutor,
+            // R06 真实锁屏下发链路：classroom.lock/unlock → session_agent 推送
+            // LockOverlay 帧（payload {"action":"show"/"hide"}）
+            LockOverlayPusher = action => _ipcServer!.TryPushToComponentAsync(
+                "session_agent",
+                IpcConstants.MessageTypeLockOverlay,
+                System.Text.Encoding.UTF8.GetBytes($"{{\"action\":\"{action}\"}}")),
         };
         _ipcServer.RequestReceived += OnRequestReceived;
         await _ipcServer.StartAsync();

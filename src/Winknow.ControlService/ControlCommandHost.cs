@@ -34,6 +34,8 @@ internal sealed class ControlCommandHost
     private const string DeviceGetState = "device.get_state";
     private const string ClassroomBegin = "classroom.begin";
     private const string ClassroomEnd = "classroom.end";
+    private const string ClassroomLock = "classroom.lock";
+    private const string ClassroomUnlock = "classroom.unlock";
     private const string PolicyApply = "policy.apply";
     private const string PolicyRestore = "policy.restore";
     private const string RunnerGetCapabilities = "runner.get_capabilities";
@@ -89,6 +91,13 @@ internal sealed class ControlCommandHost
 
     /// <summary>Runner 执行器（Worker 绑定；null 时 runner.* 返回 UNAVAILABLE）。</summary>
     internal RunnerExecutor? Runner { private get; set; }
+
+    /// <summary>
+    /// 锁屏遮罩推送器（R06 真实锁屏下发链路，Worker 绑定）：action 为
+    /// "show"/"hide"，返回是否成功推送到在线 session_agent；null 表示
+    /// 本宿主未绑定推送通道（推送不可用）。
+    /// </summary>
+    internal Func<string, Task<bool>>? LockOverlayPusher { private get; set; }
 
     /// <summary>分发请求（转发到注册表；信封解析失败由调用方处理）。</summary>
     /// <param name="request">请求信封。</param>
@@ -151,6 +160,26 @@ internal sealed class ControlCommandHost
             Timeout = TimeSpan.FromSeconds(15),
             AuditLevel = "full",
             Handler = EndClassroomAsync,
+        });
+
+        Registry.Register(new IpcCommandSpec
+        {
+            Method = ClassroomLock,
+            RequiredCapability = "classroom.control",
+            AllowedRoles = new HashSet<IpcCallerRole> { IpcCallerRole.System },
+            Timeout = TimeSpan.FromSeconds(15),
+            AuditLevel = "full",
+            Handler = (context, _) => LockOverlayAsync(context, action: "show"),
+        });
+
+        Registry.Register(new IpcCommandSpec
+        {
+            Method = ClassroomUnlock,
+            RequiredCapability = "classroom.control",
+            AllowedRoles = new HashSet<IpcCallerRole> { IpcCallerRole.System },
+            Timeout = TimeSpan.FromSeconds(15),
+            AuditLevel = "full",
+            Handler = (context, _) => LockOverlayAsync(context, action: "hide"),
         });
 
         Registry.Register(new IpcCommandSpec
@@ -288,6 +317,37 @@ internal sealed class ControlCommandHost
             started_at_unix = startedAt,
             ended_at_unix = endedAt,
         }));
+    }
+
+    /// <summary>
+    /// classroom.lock / classroom.unlock（R06 真实锁屏下发链路）：向在线
+    /// session_agent 推送 LockOverlay 帧（payload {"action":"show"/"hide"}），
+    /// Agent 在学生桌面显示/隐藏遮罩。无在线 Agent 连接返回 UNAVAILABLE；
+    /// 幂等性由 Agent 端 LockOverlay.Show/Hide 保证（重复下发不报错）。
+    /// </summary>
+    private async Task<ResponseEnvelope> LockOverlayAsync(IpcCommandContext context, string action)
+    {
+        if (LockOverlayPusher is null)
+        {
+            return Error(
+                IpcErrorCodes.Unavailable, "lock overlay push channel is not bound on this host.",
+                context.Request.TraceId);
+        }
+
+        var pushed = await LockOverlayPusher(action).ConfigureAwait(false);
+        if (!pushed)
+        {
+            return Error(
+                IpcErrorCodes.Unavailable, "no session_agent connected to receive lock overlay.",
+                context.Request.TraceId);
+        }
+
+        _logger?.LogInformation("Lock overlay {Action} pushed (caller={CallerSid})", action, context.Session.CallerSid);
+        return ResponseEnvelope.FromResult(new
+        {
+            pushed = true,
+            action,
+        });
     }
 
     private Task<ResponseEnvelope> ApplyPolicyAsync(IpcCommandContext context, CancellationToken cancellationToken)
