@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -17,6 +18,25 @@ public sealed class IpcRequestContext
 
     /// <summary>连接会话（已协商能力、调用方身份）。</summary>
     public required IpcConnectionSession Session { get; init; }
+}
+
+/// <summary>
+/// 已握手连接的注册项（R06 推送通道）：服务端主动下发帧与连接处理循环的
+/// Ack/Response 写入共享同一管道流，须经 [WriteLock] 串行化，防止交错写坏帧。
+/// </summary>
+internal sealed class IpcConnectionRegistration : IAsyncDisposable
+{
+    public required NamedPipeServerStream Stream { get; init; }
+
+    public required IpcConnectionSession Session { get; init; }
+
+    public SemaphoreSlim WriteLock { get; } = new(1, 1);
+
+    public async ValueTask DisposeAsync()
+    {
+        WriteLock.Dispose();
+        await ValueTask.CompletedTask.ConfigureAwait(false);
+    }
 }
 
 /// <summary>
@@ -40,6 +60,8 @@ public sealed class IpcServer : IAsyncDisposable
     private readonly IpcHandshakeValidator _handshakeValidator;
     private readonly ILogger<IpcServer>? _logger;
     private readonly CancellationTokenSource _cts = new();
+    private readonly ConcurrentDictionary<string, IpcConnectionRegistration> _componentConnections =
+        new(StringComparer.Ordinal);
     private Task? _listenTask;
 
     /// <summary>接收到有效消息（心跳与旧帧类型）时触发，服务端自动回 Ack。</summary>
@@ -47,6 +69,47 @@ public sealed class IpcServer : IAsyncDisposable
 
     /// <summary>接收到业务请求帧（握手完成后）时触发；返回值作为 Response 帧回写。</summary>
     public event Func<IpcRequestContext, CancellationToken, Task<ResponseEnvelope>>? RequestReceived;
+
+    /// <summary>指定组件当前是否有已握手的活跃连接（R06 推送通道查询）。</summary>
+    public bool IsComponentConnected(string component) =>
+        _componentConnections.TryGetValue(component, out var reg) && reg.Stream.IsConnected;
+
+    /// <summary>
+    /// 向指定组件的当前连接推送一帧（R06 服务端主动下发：锁屏遮罩等）。
+    ///
+    /// 推送帧 requestId 恒为 0（非请求-响应语义，客户端接收循环不校验）；
+    /// 写入与连接处理循环的 Ack/Response 经连接写锁串行。无活跃连接或写入
+    /// 失败返回 false（连接坏损由读循环自行发现并清理注册表）。
+    /// </summary>
+    public async Task<bool> TryPushToComponentAsync(
+        string component, ushort messageType, byte[] payload, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(component);
+
+        if (!_componentConnections.TryGetValue(component, out var registration)
+            || !registration.Stream.IsConnected)
+        {
+            return false;
+        }
+
+        var serverSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+        var frame = IpcMessage.Create(
+            requestId: 0,
+            messageType: messageType,
+            payload: payload,
+            senderSid: serverSid);
+
+        try
+        {
+            await WriteMessageLockedAsync(registration, frame, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+        {
+            _logger?.LogWarning(ex, "IPC push to component {Component} failed.", component);
+            return false;
+        }
+    }
 
     /// <summary>
     /// 创建 Named Pipe 服务端。
@@ -195,148 +258,168 @@ public sealed class IpcServer : IAsyncDisposable
             {
                 var session = new IpcConnectionSession();
                 var serverSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+                var registration = new IpcConnectionRegistration { Stream = pipeStream, Session = session };
+                IpcConnectionRegistration? registered = null;
 
-                while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
+                try
                 {
-                    var actualSenderSid = GetClientSid(pipeStream);
-                    if (actualSenderSid is null)
+                    while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
                     {
-                        _logger?.LogWarning("IPC connection rejected because the client identity could not be determined.");
-                        break;
-                    }
-
-                    var messageResult = await ReadMessageAsync(pipeStream, cancellationToken).ConfigureAwait(false);
-                    if (!messageResult.IsSuccess)
-                    {
-                        _logger?.LogWarning("IPC read failed: {Error}", messageResult.ErrorMessage);
-                        break;
-                    }
-
-                    var message = messageResult.Data!;
-                    var validation = _authenticator.ValidateMessage(message, actualSenderSid: actualSenderSid);
-                    if (!validation.IsSuccess)
-                    {
-                        _logger?.LogWarning("IPC message rejected: {ErrorCode} {Message}",
-                            validation.ErrorCode, validation.ErrorMessage);
-
-                        // 帧级校验失败：JSON 错误信封（契约化 payload），连接保留供诊断与重试；
-                        // 动态 SID 过期显式区分 IPC_SID_EXPIRED（ADR-002），其余归入未授权
-                        var frameErrorCode = validation.ErrorCode == Winknow.Core.Results.ErrorCode.IpcSidExpired
-                            ? IpcErrorCodes.IpcSidExpired
-                            : IpcErrorCodes.IpcSidNotAuthorized;
-                        await WriteErrorResponseAsync(pipeStream, message.RequestId,
-                            frameErrorCode,
-                            $"frame rejected: {validation.ErrorMessage}",
-                            closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
-                        continue;
-                    }
-
-                    // 连接级 RequestId 单调检查（防乱序回退）：跨连接重放由 Nonce 全局查重承担，
-                    // 同一 SID 的多客户端并发各自维护独立 RequestId 时钟（ADR-002），不可跨连接比较
-                    if (session.LastSeenRequestId.HasValue && message.RequestId <= session.LastSeenRequestId.Value)
-                    {
-                        await WriteErrorResponseAsync(pipeStream, message.RequestId,
-                            IpcErrorCodes.IpcReplayDetected,
-                            "request id must strictly increase within a connection.",
-                            closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
-                        continue;
-                    }
-
-                    session.LastSeenRequestId = message.RequestId;
-
-                    switch (message.MessageType)
-                    {
-                        case IpcConstants.MessageTypeHandshake:
+                        var actualSenderSid = GetClientSid(pipeStream);
+                        if (actualSenderSid is null)
                         {
-                            if (session.HandshakeCompleted)
-                            {
-                                await WriteErrorResponseAsync(pipeStream, message.RequestId,
-                                    IpcErrorCodes.InvalidArgument, "handshake already completed.",
-                                    closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
-                                break;
-                            }
-
-                            var outcome = _handshakeValidator.Handle(message.Payload, message.SenderSid);
-                            _logger?.LogInformation(
-                                "IPC handshake {Result} for sid {Sid} component {Component}: capabilities [{Capabilities}]",
-                                outcome.Accepted ? "accepted" : "rejected",
-                                message.SenderSid,
-                                session.Component,
-                                string.Join(",", outcome.GrantedCapabilities));
-
-                            await WriteResponseFrameAsync(pipeStream, message.RequestId, outcome.Response, serverSid, cancellationToken)
-                                .ConfigureAwait(false);
-
-                            if (outcome.CloseConnection)
-                            {
-                                return;
-                            }
-
-                            if (outcome.Accepted)
-                            {
-                                session.HandshakeCompleted = true;
-                                session.GrantedCapabilities = outcome.GrantedCapabilities;
-                                session.SessionId = outcome.SessionId;
-                                session.CallerSid = message.SenderSid;
-                                session.Component = outcome.Component;
-                            }
-
+                            _logger?.LogWarning("IPC connection rejected because the client identity could not be determined.");
                             break;
                         }
 
-                        case IpcConstants.MessageTypeRequest:
+                        var messageResult = await ReadMessageAsync(pipeStream, cancellationToken).ConfigureAwait(false);
+                        if (!messageResult.IsSuccess)
                         {
-                            if (!session.HandshakeCompleted)
+                            _logger?.LogWarning("IPC read failed: {Error}", messageResult.ErrorMessage);
+                            break;
+                        }
+
+                        var message = messageResult.Data!;
+                        var validation = _authenticator.ValidateMessage(message, actualSenderSid: actualSenderSid);
+                        if (!validation.IsSuccess)
+                        {
+                            _logger?.LogWarning("IPC message rejected: {ErrorCode} {Message}",
+                                validation.ErrorCode, validation.ErrorMessage);
+
+                            // 帧级校验失败：JSON 错误信封（契约化 payload），连接保留供诊断与重试；
+                            // 动态 SID 过期显式区分 IPC_SID_EXPIRED（ADR-002），其余归入未授权
+                            var frameErrorCode = validation.ErrorCode == Winknow.Core.Results.ErrorCode.IpcSidExpired
+                                ? IpcErrorCodes.IpcSidExpired
+                                : IpcErrorCodes.IpcSidNotAuthorized;
+                            await WriteErrorResponseLockedAsync(registration, message.RequestId,
+                                frameErrorCode,
+                                $"frame rejected: {validation.ErrorMessage}",
+                                closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        // 连接级 RequestId 单调检查（防乱序回退）：跨连接重放由 Nonce 全局查重承担，
+                        // 同一 SID 的多客户端并发各自维护独立 RequestId 时钟（ADR-002），不可跨连接比较
+                        if (session.LastSeenRequestId.HasValue && message.RequestId <= session.LastSeenRequestId.Value)
+                        {
+                            await WriteErrorResponseLockedAsync(registration, message.RequestId,
+                                IpcErrorCodes.IpcReplayDetected,
+                                "request id must strictly increase within a connection.",
+                                closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        session.LastSeenRequestId = message.RequestId;
+
+                        switch (message.MessageType)
+                        {
+                            case IpcConstants.MessageTypeHandshake:
                             {
-                                await WriteErrorResponseAsync(pipeStream, message.RequestId,
-                                    IpcErrorCodes.IpcHandshakeRequired,
-                                    "first frame must be ipc.handshake.",
-                                    closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
+                                if (session.HandshakeCompleted)
+                                {
+                                    await WriteErrorResponseLockedAsync(registration, message.RequestId,
+                                        IpcErrorCodes.InvalidArgument, "handshake already completed.",
+                                        closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
+                                    break;
+                                }
+
+                                var outcome = _handshakeValidator.Handle(message.Payload, message.SenderSid);
+                                _logger?.LogInformation(
+                                    "IPC handshake {Result} for sid {Sid} component {Component}: capabilities [{Capabilities}]",
+                                    outcome.Accepted ? "accepted" : "rejected",
+                                    message.SenderSid,
+                                    session.Component,
+                                    string.Join(",", outcome.GrantedCapabilities));
+
+                                await WriteResponseFrameLockedAsync(registration, message.RequestId, outcome.Response, serverSid, cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                if (outcome.CloseConnection)
+                                {
+                                    return;
+                                }
+
+                                if (outcome.Accepted)
+                                {
+                                    session.HandshakeCompleted = true;
+                                    session.GrantedCapabilities = outcome.GrantedCapabilities;
+                                    session.SessionId = outcome.SessionId;
+                                    session.CallerSid = message.SenderSid;
+                                    session.Component = outcome.Component;
+
+                                    // R06 推送通道注册：同组件新连接覆盖旧注册（旧连接断连时
+                                    // identity check 防止误删新注册）
+                                    _componentConnections[session.Component] = registration;
+                                    registered = registration;
+                                }
+
                                 break;
                             }
 
-                            var context = new IpcRequestContext { Message = message, Session = session };
-                            ResponseEnvelope response;
-                            if (RequestReceived is null)
+                            case IpcConstants.MessageTypeRequest:
                             {
-                                response = ResponseEnvelope.FromError(ErrorEnvelope.Create(
-                                    IpcErrorCodes.NotImplemented, "no request handler registered."));
-                            }
-                            else
-                            {
-                                try
+                                if (!session.HandshakeCompleted)
                                 {
-                                    response = await RequestReceived.Invoke(context, cancellationToken).ConfigureAwait(false);
+                                    await WriteErrorResponseLockedAsync(registration, message.RequestId,
+                                        IpcErrorCodes.IpcHandshakeRequired,
+                                        "first frame must be ipc.handshake.",
+                                        closeConnection: false, serverSid, cancellationToken).ConfigureAwait(false);
+                                    break;
                                 }
-                                catch (Exception ex)
+
+                                var context = new IpcRequestContext { Message = message, Session = session };
+                                ResponseEnvelope response;
+                                if (RequestReceived is null)
                                 {
-                                    _logger?.LogError(ex, "IPC request handler failed for request {RequestId}.", message.RequestId);
                                     response = ResponseEnvelope.FromError(ErrorEnvelope.Create(
-                                        IpcErrorCodes.InternalError, "request handler failed."));
+                                        IpcErrorCodes.NotImplemented, "no request handler registered."));
                                 }
+                                else
+                                {
+                                    try
+                                    {
+                                        response = await RequestReceived.Invoke(context, cancellationToken).ConfigureAwait(false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger?.LogError(ex, "IPC request handler failed for request {RequestId}.", message.RequestId);
+                                        response = ResponseEnvelope.FromError(ErrorEnvelope.Create(
+                                            IpcErrorCodes.InternalError, "request handler failed."));
+                                    }
+                                }
+
+                                await WriteResponseFrameLockedAsync(registration, message.RequestId, response, serverSid, cancellationToken)
+                                    .ConfigureAwait(false);
+                                break;
                             }
 
-                            await WriteResponseFrameAsync(pipeStream, message.RequestId, response, serverSid, cancellationToken)
-                                .ConfigureAwait(false);
-                            break;
-                        }
-
-                        default:
-                        {
-                            // 心跳与旧帧类型：保持既有 MessageReceived + Ack 行为（SessionAgent 兼容）
-                            if (MessageReceived is not null)
+                            default:
                             {
-                                await MessageReceived.Invoke(message, cancellationToken).ConfigureAwait(false);
-                            }
+                                // 心跳与旧帧类型：保持既有 MessageReceived + Ack 行为（SessionAgent 兼容）
+                                if (MessageReceived is not null)
+                                {
+                                    await MessageReceived.Invoke(message, cancellationToken).ConfigureAwait(false);
+                                }
 
-                            var ack = IpcMessage.Create(
-                                requestId: message.RequestId,
-                                messageType: IpcConstants.MessageTypeAck,
-                                payload: Array.Empty<byte>(),
-                                senderSid: serverSid);
-                            await WriteMessageAsync(pipeStream, ack, cancellationToken).ConfigureAwait(false);
-                            break;
+                                var ack = IpcMessage.Create(
+                                    requestId: message.RequestId,
+                                    messageType: IpcConstants.MessageTypeAck,
+                                    payload: Array.Empty<byte>(),
+                                    senderSid: serverSid);
+                                await WriteMessageLockedAsync(registration, ack, cancellationToken).ConfigureAwait(false);
+                                break;
+                            }
                         }
+                    }
+                }
+                finally
+                {
+                    // 连接结束注销推送注册（仅当注册仍指向本连接时移除，防止误删同组件重连的新注册）
+                    if (registered is not null
+                        && _componentConnections.TryGetValue(registered.Session.Component, out var current)
+                        && ReferenceEquals(current, registered))
+                    {
+                        _componentConnections.TryRemove(registered.Session.Component, out _);
                     }
                 }
             }
@@ -351,7 +434,22 @@ public sealed class IpcServer : IAsyncDisposable
         }
     }
 
-    private static async Task WriteResponseFrameAsync(Stream stream, uint requestId, ResponseEnvelope response,
+    private static async Task WriteMessageLockedAsync(
+        IpcConnectionRegistration registration, IpcMessage message, CancellationToken cancellationToken)
+    {
+        await registration.WriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await WriteMessageAsync(registration.Stream, message, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            registration.WriteLock.Release();
+        }
+    }
+
+    private static async Task WriteResponseFrameLockedAsync(
+        IpcConnectionRegistration registration, uint requestId, ResponseEnvelope response,
         string serverSid, CancellationToken cancellationToken)
     {
         var frame = IpcMessage.Create(
@@ -359,16 +457,18 @@ public sealed class IpcServer : IAsyncDisposable
             messageType: IpcConstants.MessageTypeResponse,
             payload: Encoding.UTF8.GetBytes(response.Serialize()),
             senderSid: serverSid);
-        await WriteMessageAsync(stream, frame, cancellationToken).ConfigureAwait(false);
+        await WriteMessageLockedAsync(registration, frame, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task WriteErrorResponseAsync(Stream stream, uint requestId, string code, string message,
+    private static async Task WriteErrorResponseLockedAsync(
+        IpcConnectionRegistration registration, uint requestId, string code, string message,
         bool closeConnection, string serverSid, CancellationToken cancellationToken)
     {
         var response = ResponseEnvelope.FromError(ErrorEnvelope.Create(code, message, details: closeConnection
             ? new Dictionary<string, object?> { ["close"] = true }
             : null));
-        await WriteResponseFrameAsync(stream, requestId, response, serverSid, cancellationToken).ConfigureAwait(false);
+        await WriteResponseFrameLockedAsync(registration, requestId, response, serverSid, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static string? GetClientSid(NamedPipeServerStream pipeStream)

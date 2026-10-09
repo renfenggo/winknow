@@ -129,6 +129,55 @@ public sealed class IpcClient : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 只写不发等待 Ack 的心跳帧（R06 双工接收模式）：配合 [ReadServerFrameAsync]
+    /// 独占接收循环使用——服务端可主动推送帧（如 LockOverlay），Ack 与推送帧
+    /// 统一由接收循环消费，此处不得读流。
+    /// </summary>
+    public async Task WriteHeartbeatAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var stream = _stream;
+        if (stream is not { IsConnected: true })
+        {
+            throw new IOException("IPC client is not connected.");
+        }
+
+        var requestId = Interlocked.Increment(ref _lastRequestId);
+        var frame = IpcMessage.Create(
+            requestId: requestId,
+            messageType: IpcConstants.MessageTypeHeartbeat,
+            payload: Array.Empty<byte>());
+
+        await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ioLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 读取服务端发来的下一帧（R06 双工接收模式）：仅供独占接收线程调用
+    /// （读侧唯一读者约定；推送帧 requestId 为 0，Ack/Response 由调用方按帧类型分发）。
+    /// </summary>
+    public async Task<IpcMessage> ReadServerFrameAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var stream = _stream;
+        if (stream is not { IsConnected: true })
+        {
+            throw new IOException("IPC client is not connected.");
+        }
+
+        return await ReadFrameAsync(stream, cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<ResponseEnvelope> SendAndReceiveAsync(ushort messageType, string payloadJson, CancellationToken cancellationToken)
     {
         var responseFrame = await SendAndReceiveFrameAsync(
@@ -157,12 +206,7 @@ public sealed class IpcClient : IAsyncDisposable
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var bytes = frame.ToBytes();
-            var lengthPrefix = new byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(lengthPrefix, (uint)bytes.Length);
-            await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
-            await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await WriteFrameAsync(stream, frame, cancellationToken).ConfigureAwait(false);
 
             var responseFrame = await ReadFrameAsync(stream, cancellationToken).ConfigureAwait(false);
             if (responseFrame.MessageType != expectedFrameType)
@@ -181,6 +225,17 @@ public sealed class IpcClient : IAsyncDisposable
         {
             _ioLock.Release();
         }
+    }
+
+    private static async Task WriteFrameAsync(NamedPipeClientStream stream, IpcMessage frame,
+        CancellationToken cancellationToken)
+    {
+        var bytes = frame.ToBytes();
+        var lengthPrefix = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(lengthPrefix, (uint)bytes.Length);
+        await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<IpcMessage> ReadFrameAsync(NamedPipeClientStream stream, CancellationToken cancellationToken)

@@ -51,13 +51,14 @@ internal static class IpcTestHarness
     /// 启动进程内 IpcServer：当前用户 SID 白名单（可替换 authenticator 以构造过期等状态）。
     /// </summary>
     public static async Task<IpcServer> StartServerAsync(string pipeName, IpcCommandRegistry registry,
-        IpcAuthenticator? authenticator = null, string deviceId = DeviceId)
+        IpcAuthenticator? authenticator = null, string deviceId = DeviceId,
+        IReadOnlySet<string>? supportedCapabilities = null)
     {
         authenticator ??= new IpcAuthenticator(new[] { CurrentSid }, deviceId);
         var descriptor = new IpcServerDescriptor
         {
             ComponentVersion = "test-server",
-            SupportedCapabilities = new HashSet<string>(StringComparer.Ordinal)
+            SupportedCapabilities = supportedCapabilities ?? new HashSet<string>(StringComparer.Ordinal)
             {
                 "status.read", "device.read", "runner.read", "classroom.control",
             },
