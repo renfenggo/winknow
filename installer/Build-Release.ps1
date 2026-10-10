@@ -62,6 +62,15 @@ $targets = @(
 )
 
 function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
+function Remove-InstallerTemporaryDirectory([string]$Path) {
+    $resolvedTarget = [IO.Path]::GetFullPath($Path)
+    $allowedRoot = [IO.Path]::GetFullPath($scriptRoot).TrimEnd('\') + '\'
+    if (-not $resolvedTarget.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        (Split-Path $resolvedTarget -Leaf) -notin @('obf_workspace', 'original_backup')) {
+        throw 'Temporary cleanup target escaped the installer workspace.'
+    }
+    Remove-Item -LiteralPath $resolvedTarget -Recurse -Force
+}
 
 # ── 1. 构建与发布 ─────────────────────────────────────────────
 if (-not $SkipBuild) {
@@ -118,7 +127,7 @@ if (-not $SkipObfuscation) {
     # "Unable to resolve dependency"，故将全部程序集平铺到 installer\obf_workspace
     $obfWorkspace = Join-Path $scriptRoot 'obf_workspace'
     if (Test-Path $obfWorkspace) {
-        Remove-Item -Path $obfWorkspace -Recurse -Force
+        Remove-InstallerTemporaryDirectory $obfWorkspace
     }
     New-Item -ItemType Directory -Force -Path $obfWorkspace | Out-Null
     Get-ChildItem $OutputRoot -Recurse -Include *.dll, *.exe -File |
@@ -141,7 +150,7 @@ if (-not $SkipObfuscation) {
     # 备份原始DLL（放 payload 外：未混淆程序集不得进入 manifest 与分发产物）
     $backupDir = Join-Path $scriptRoot 'original_backup'
     if (Test-Path $backupDir) {
-        Remove-Item -Path $backupDir -Recurse -Force
+        Remove-InstallerTemporaryDirectory $backupDir
     }
     New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
     
@@ -188,7 +197,7 @@ if (-not $SkipObfuscation) {
 
     # 清理临时工作区
     if (Test-Path $obfWorkspace) {
-        Remove-Item -Path $obfWorkspace -Recurse -Force
+        Remove-InstallerTemporaryDirectory $obfWorkspace
     }
     
     Write-Host "混淆完成，原始DLL已备份到: $backupDir" -ForegroundColor Green
