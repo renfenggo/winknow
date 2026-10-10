@@ -130,20 +130,33 @@ const
 // .NET 8 运行时检测（注册表 + 文件系统双保险）
 function IsNet8DesktopRuntimeInstalled(): Boolean;
 var
-  version: string;
+  versions: TArrayOfString;
+  i: Integer;
   runtimeDir: string;
+  found: TFindRec;
 begin
   Result := False;
-  // ① 注册表：InstalledVersions 的 sharedfx 版本值 ≥ 8
-  if RegQueryStringValue(HKEY_LOCAL_MACHINE, Net8RegKey, 'Version', version) then
-    if Pos('8.', version) = 1 then
-      Result := True;
-  // ② 文件系统：Program Files\dotnet\shared\Microsoft.WindowsDesktop.App 下存在 8.x 目录
+  // sharedfx stores installed versions as value names, not a single Version value.
+  if RegGetValueNames(HKEY_LOCAL_MACHINE, Net8RegKey, versions) then
+    for i := 0 to GetArrayLength(versions) - 1 do
+      if Pos('8.0.', versions[i]) = 1 then
+        Result := True;
+  // Check actual patch directories and their runtime binary, e.g. 8.0.31.
   if not Result then
   begin
     runtimeDir := ExpandConstant('{autopf}\dotnet\shared\Microsoft.WindowsDesktop.App');
-    if DirExists(runtimeDir + '\8.0') then
-      Result := True;
+    if FindFirst(runtimeDir + '\8.0.*', found) then
+    begin
+      try
+        repeat
+          if (found.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0) and
+            FileExists(runtimeDir + '\' + found.Name + '\PresentationFramework.dll') then
+            Result := True;
+        until Result or not FindNext(found);
+      finally
+        FindClose(found);
+      end;
+    end;
   end;
 end;
 
