@@ -2,7 +2,7 @@ name: Winknow V7.0 CI
 
 on:
   push:
-    branches: [main, develop, "feature/**"]
+    branches: [main, develop, "feature/**", "codex/**"]
   pull_request:
   workflow_dispatch:
 
@@ -29,6 +29,9 @@ jobs:
 
       - name: Build (Release)
         run: dotnet build WinknowV7.sln --configuration Release --no-restore --nologo
+
+      - name: Classroom selection and local-control scope smoke
+        run: dotnet run --project tools/Winknow.ClassroomUiSmoke/Winknow.ClassroomUiSmoke.csproj --configuration Release
 
       - name: Test (Release)
         # CI 首跑修正（2026-10-08）：本地 Release 741/741 全绿但 CI 失败且日志需登录才能看。

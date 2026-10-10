@@ -16,6 +16,20 @@
 #define MyAppVersion "7.0.1"
 #define MyAppPublisher "Winknow Project"
 #define MyAppExeName "Winknow.AdminUI.exe"
+#ifndef PayloadRoot
+  #define PayloadRoot "payload"
+#endif
+#ifndef SetupBaseFilename
+  #define SetupBaseFilename "WinknowSetup_" + MyAppVersion
+#endif
+#ifndef RequireFlutterClient
+  #define RequireFlutterClient 0
+#endif
+#if RequireFlutterClient
+  #if !FileExists(PayloadRoot + "\app\bfs_learn.exe")
+    #error "Full fusion installer requires a built Flutter client."
+  #endif
+#endif
 
 [Setup]
 AppId={{8F3A2C41-7B5E-4D69-9A0C-3E1F5B7D9E42}
@@ -26,7 +40,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=admin
 OutputDir=dist
-OutputBaseFilename=WinknowSetup_{#MyAppVersion}
+OutputBaseFilename={#SetupBaseFilename}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -51,23 +65,23 @@ Name: "student"; Description: "算法通学习客户端（Flutter）"; Types: fu
 
 [Files]
 ; 服务二进制 → deploy\Current（服务从此运行；更新走槽切换）
-Source: "payload\services\*"; DestDir: "{commonappdata}\Winknow\deploy\Current"; Components: services; Flags: ignoreversion recursesubdirs
+Source: "{#PayloadRoot}\services\*"; DestDir: "{commonappdata}\Winknow\deploy\Current"; Components: services; Flags: ignoreversion recursesubdirs
 ; 更新器 → 安装目录（常驻，不受槽切换影响）
-Source: "payload\updater\*"; DestDir: "{app}\Updater"; Components: updater; Flags: ignoreversion recursesubdirs
+Source: "{#PayloadRoot}\updater\*"; DestDir: "{app}\Updater"; Components: updater; Flags: ignoreversion recursesubdirs
 ; 管理控制台
-Source: "payload\admin\*"; DestDir: "{app}\AdminUI"; Components: admin; Flags: ignoreversion recursesubdirs
+Source: "{#PayloadRoot}\admin\*"; DestDir: "{app}\AdminUI"; Components: admin; Flags: ignoreversion recursesubdirs
 ; 每个学生会话使用的交互式 Agent；由 ControlService 从 Current\agent 拉起
-Source: "payload\agent\*"; DestDir: "{commonappdata}\Winknow\deploy\Current\agent"; Components: services; Flags: ignoreversion recursesubdirs
+Source: "{#PayloadRoot}\agent\*"; DestDir: "{commonappdata}\Winknow\deploy\Current\agent"; Components: services; Flags: ignoreversion recursesubdirs
 ; 恢复工具不受部署槽切换影响
-Source: "payload\tools\*"; DestDir: "{app}\Tools"; Components: services; Flags: ignoreversion recursesubdirs
+Source: "{#PayloadRoot}\tools\*"; DestDir: "{app}\Tools"; Components: services; Flags: ignoreversion recursesubdirs
 ; DesktopBridge → 安装根目录（算法通 desktop_bridge_client 固定探测 {autopf}\Winknow\Winknow.DesktopBridge.exe）
-Source: "payload\bridge\*"; DestDir: "{app}"; Components: bridge; Flags: ignoreversion recursesubdirs
+Source: "{#PayloadRoot}\bridge\*"; DestDir: "{app}"; Components: bridge; Flags: ignoreversion recursesubdirs
 ; 算法通学习客户端（Build-Release.ps1 -FlutterBuildRoot 注入 payload\app；缺失时跳过）
-Source: "payload\app\*"; DestDir: "{app}\Suanfatong"; Components: student; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+Source: "{#PayloadRoot}\app\*"; DestDir: "{app}\Suanfatong"; Components: student; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
 ; 更新包验证公钥；正式构建必须提供，测试构建可省略
-Source: "payload\keys\publickey.pem"; DestDir: "{commonappdata}\Winknow\deploy"; Components: updater; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#PayloadRoot}\keys\publickey.pem"; DestDir: "{commonappdata}\Winknow\deploy"; Components: updater; Flags: ignoreversion skipifsourcedoesntexist
 ; 默认策略（仅首次安装部署；升级不覆盖机房定制策略）
-Source: "payload\policy\default_policy_v7.0.json"; DestDir: "{commonappdata}\Winknow\policies"; DestName: "active_policy.json"; Flags: onlyifdoesntexist
+Source: "{#PayloadRoot}\policy\default_policy_v7.0.json"; DestDir: "{commonappdata}\Winknow\policies"; DestName: "active_policy.json"; Flags: onlyifdoesntexist
 
 [Dirs]
 ; ProgramData 数据目录：BUILTIN\Users 只读（学生不可改策略/审计）

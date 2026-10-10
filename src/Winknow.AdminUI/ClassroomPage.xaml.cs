@@ -25,7 +25,8 @@ public partial class ClassroomPage : Page
 
     private readonly TeacherLicenseServer _licenseServer;
     private readonly ILogger<ClassroomPage>? _logger;
-    private DeviceStatusInfo? _selectedDevice;
+    private DeviceViewModel? _selectedDevice;
+    private readonly string _localDeviceId = DeviceId.Generate();
 
     /// <summary>
     /// 初始化 ClassroomPage 类的新实例。
@@ -136,6 +137,11 @@ public partial class ClassroomPage : Page
             MessageBox.Show("请先选择一个设备", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        if (!IsSelectedDeviceLocal())
+        {
+            MessageBox.Show("当前版本仅支持在目标设备本机解除遮罩，远程课堂控制尚未开放。", "操作范围", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         var result = MessageBox.Show(
             $"确定要解锁设备 {_selectedDevice.StudentName} ({_selectedDevice.DeviceId}) 吗？",
@@ -155,7 +161,7 @@ public partial class ClassroomPage : Page
                     var overlayResult = await InvokeClassroomMethodAsync(ClassroomUnlockMethod);
                     if (overlayResult.Ok)
                     {
-                        MessageBox.Show("设备解锁成功（锁屏遮罩已解除）", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                        MessageBox.Show("解除遮罩请求已发送，请确认本机桌面已恢复。", "已下发", MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                     else
                     {
@@ -164,8 +170,8 @@ public partial class ClassroomPage : Page
                             "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
                     }
 
+                    _logger?.LogInformation("Device {DeviceId} unlock request completed by admin", _selectedDevice?.DeviceId);
                     LoadDevices();
-                    _logger?.LogInformation("Device {DeviceId} unlocked by admin", _selectedDevice.DeviceId);
                 }
                 else
                 {
@@ -191,9 +197,14 @@ public partial class ClassroomPage : Page
             MessageBox.Show("请先选择一个设备", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        if (!IsSelectedDeviceLocal())
+        {
+            MessageBox.Show("当前版本仅支持锁定本机，远程课堂控制尚未开放。", "操作范围", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         var result = MessageBox.Show(
-            $"确定要锁定设备 {_selectedDevice.StudentName} ({_selectedDevice.DeviceId}) 吗？\n\n锁定后设备将显示锁屏遮罩，需要解锁码才能恢复。",
+            $"确定要锁定本机 {_selectedDevice.StudentName} ({_selectedDevice.DeviceId}) 吗？\n\n锁定后需要管理员解除遮罩。",
             "确认锁定",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -211,7 +222,7 @@ public partial class ClassroomPage : Page
                     var overlayResult = await InvokeClassroomMethodAsync(ClassroomLockMethod);
                     if (overlayResult.Ok)
                     {
-                        MessageBox.Show("设备锁定成功（锁屏遮罩已下发）", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                        MessageBox.Show("锁屏请求已发送，请确认本机桌面已显示遮罩。", "已下发", MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                     else
                     {
@@ -220,8 +231,8 @@ public partial class ClassroomPage : Page
                             "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
                     }
 
+                    _logger?.LogInformation("Device {DeviceId} lock request completed by admin", _selectedDevice?.DeviceId);
                     LoadDevices();
-                    _logger?.LogInformation("Device {DeviceId} locked by admin", _selectedDevice.DeviceId);
                 }
                 else
                 {
@@ -333,7 +344,7 @@ public partial class ClassroomPage : Page
     /// </summary>
     private void DevicesGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _selectedDevice = (DeviceStatusInfo)DevicesGrid.SelectedItem;
+        _selectedDevice = DevicesGrid.SelectedItem as DeviceViewModel;
         UpdateButtonStates();
     }
 
@@ -346,9 +357,13 @@ public partial class ClassroomPage : Page
         var isLocked = _selectedDevice?.Status == DeviceStatus.Locked;
 
         GenerateCodeButton.IsEnabled = hasSelection;
-        UnlockButton.IsEnabled = hasSelection && isLocked;
-        LockButton.IsEnabled = hasSelection && !isLocked;
+        var isLocal = IsSelectedDeviceLocal();
+        UnlockButton.IsEnabled = hasSelection && isLocal && isLocked;
+        LockButton.IsEnabled = hasSelection && isLocal && !isLocked;
     }
+
+    private bool IsSelectedDeviceLocal() =>
+        _selectedDevice is not null && string.Equals(_selectedDevice.DeviceId, _localDeviceId, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

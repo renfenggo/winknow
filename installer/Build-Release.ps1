@@ -20,7 +20,9 @@ param(
     [string]$PublicKeyPath = "",
     # Flutter 客户端预构建目录（suanfatong: build\windows\x64\runner\Release）→ payload\app
     # BLK-001（Windows 开发者模式）阻塞本机构建时，可从其他机器拷贝 Release 目录后传入
-    [string]$FlutterBuildRoot = ""
+    [string]$FlutterBuildRoot = "",
+    # 完整融合候选发行必须显式开启：学生客户端缺失时在构建前失败。
+    [switch]$RequireFlutterClient
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +33,20 @@ if (-not $OutputRoot) { $OutputRoot = Join-Path $scriptRoot 'payload' }
 # 相对路径 → 绝对（dotnet publish -o 以 cwd 解析，必须钉死基准）
 if (-not [IO.Path]::IsPathRooted($OutputRoot)) {
     $OutputRoot = Join-Path $scriptRoot $OutputRoot
+}
+$OutputRoot = [IO.Path]::GetFullPath($OutputRoot).TrimEnd([char[]]'\/')
+if ($RequireFlutterClient -and -not $FlutterBuildRoot) {
+    throw '完整融合发行必须提供 -FlutterBuildRoot；未构建或复制任何产物。'
+}
+if ($FlutterBuildRoot) {
+    $FlutterBuildRoot = [IO.Path]::GetFullPath($FlutterBuildRoot)
+    & (Join-Path $scriptRoot 'Validate-FlutterRelease.ps1') -ReleaseRoot $FlutterBuildRoot
+    if (Test-Path -LiteralPath (Join-Path $OutputRoot 'app')) {
+        throw '客户端目标目录已存在，请使用新的 -OutputRoot，避免旧文件混入发行物。'
+    }
+}
+elseif (Test-Path -LiteralPath (Join-Path $OutputRoot 'app')) {
+    throw '服务组件发行目录包含旧客户端，请使用新的 -OutputRoot。'
 }
 
 $targets = @(
@@ -199,6 +215,7 @@ if ($FlutterBuildRoot) {
     $appDir = Join-Path $OutputRoot 'app'
     New-Item -ItemType Directory -Force -Path $appDir | Out-Null
     Copy-Item (Join-Path $FlutterBuildRoot '*') $appDir -Recurse -Force
+    & (Join-Path $scriptRoot 'Validate-FlutterRelease.ps1') -ReleaseRoot $appDir
     $script:FlutterClientIncluded = $true
 }
 else {
